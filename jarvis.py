@@ -765,6 +765,7 @@ IMPORTANT:
                 enhanced_prompt = f"{text} (file to open: {file_path})"
         
         try:
+            try:
             return AIEngine.query_groq(system_prompt, enhanced_prompt, conversation_context=context_messages)
         except Exception as e:
             logger.error(f"Command interpretation failed: {e}")
