@@ -770,6 +770,8 @@ IMPORTANT:
             logger.error(f"Command interpretation failed: {e}")
             # Fallback: Try direct command matching
             return AIEngine._fallback_command_match(text, recent_context)
+        except Exception as e:
+            logger.error(f"Command interpretation failed: {e}")
             # Fallback: Try direct command matching
             return AIEngine._fallback_command_match(text, recent_context)
 
