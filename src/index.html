@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BenX AI Assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main class="frame">
+    <h1 class="title">BenX</h1>
+
+    <section class="layout">
+      <aside class="panel left-panel">
+        <h2>SYSTEM INFO</h2>
+        <ul class="stats">
+          <li><span>CPU:</span> <strong id="cpuUsage">15%</strong></li>
+          <li><span>Memory:</span> <strong id="memory">35%</strong></li>
+          <li><span>Disk:</span> <strong id="disk">69%</strong></li>
+          <li><span>Battery:</span> <strong id="battery">45% (Discharging)</strong></li>
+        </ul>
+        <div class="clock" id="clock">00:00:00</div>
+      </aside>
+
+      <section class="center-stage" aria-label="BenX symbol stage">
+        <div class="corner tl"></div>
+        <div class="corner tr"></div>
+        <div class="corner bl"></div>
+        <div class="corner br"></div>
+
+        <div class="logo-wrap">
+          <div class="ring outer"></div>
+          <div class="ring inner"></div>
+          <div class="benx-mark"></div>
+        </div>
+      </section>
+
+      <aside class="panel right-panel">
+        <h2>CHAT</h2>
+        <div class="chat-window">
+          <p><span class="timestamp" id="chatTs">[00:00:00]</span> BenX:</p>
+          <p>Hello! I'm BenX, your AI assistant. How can I help you?</p>
+        </div>
+        <input class="chat-input" type="text" aria-label="chat input" />
+        <div class="actions">
+          <button>SEND</button>
+          <button>VOICE</button>
+          <button class="danger">CLEAR</button>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <script src="js/script.js" defer></script>
+</body>
+</html>

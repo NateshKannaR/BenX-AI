@@ -765,14 +765,38 @@ IMPORTANT:
                 enhanced_prompt = f"{text} (file to open: {file_path})"
         
         try:
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
             try:
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
             return AIEngine.query_groq(system_prompt, enhanced_prompt, conversation_context=context_messages)
         except Exception as e:
             logger.error(f"Command interpretation failed: {e}")
             # Fallback: Try direct command matching
             return AIEngine._fallback_command_match(text, recent_context)
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
         except Exception as e:
             logger.error(f"Command interpretation failed: {e}")
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
             # Fallback: Try direct command matching
             return AIEngine._fallback_command_match(text, recent_context)
 
