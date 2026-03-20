@@ -27,12 +27,18 @@ except ImportError:
 try:
     import numpy as np
     import faiss
-    import pickle
     RAG_VECTOR_DB_AVAILABLE = True
 except ImportError:
     RAG_VECTOR_DB_AVAILABLE = False
     np = None
     logger.warning("FAISS/numpy not available. RAG will use simple text-based search.")
+
+try:
+    import pickle
+    PICKLE_AVAILABLE = True
+except ImportError:
+    PICKLE_AVAILABLE = False
+    pickle = None
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -73,6 +79,9 @@ class RAGEngine:
     
     def load_vector_db(self):
         """Load existing vector database"""
+        if not PICKLE_AVAILABLE:
+            logger.warning("Pickle not available, cannot load vector DB")
+            return
         try:
             with open(Config.VECTOR_DB_PATH, 'rb') as f:
                 data = pickle.load(f)
@@ -85,6 +94,8 @@ class RAGEngine:
     
     def save_vector_db(self):
         """Save vector database"""
+        if not PICKLE_AVAILABLE:
+            return
         try:
             with open(Config.VECTOR_DB_PATH, 'wb') as f:
                 pickle.dump({
@@ -282,6 +293,22 @@ class AIEngine:
                 
                 logger.debug(f"Trying model: {model}")
                 response = requests.post(Config.API_URL, headers=headers, json=data, timeout=Config.API_TIMEOUT)
+                
+                # Check for specific error codes and skip faster
+                if response.status_code == 404:
+                    logger.warning(f"Model {model} not found (404) - skipping")
+                    failed_models.append(model)
+                    continue
+                elif response.status_code == 400:
+                    try:
+                        error_data = response.json()
+                        if "model_decommissioned" in str(error_data):
+                            logger.warning(f"Model {model} decommissioned - skipping")
+                            failed_models.append(model)
+                            continue
+                    except:
+                        pass
+                
                 response.raise_for_status()
                 
                 result = response.json()
@@ -476,7 +503,7 @@ THINKING PROCESS:
 
 OUTPUT FORMAT:
 Output ONLY valid JSON in this exact format:
-{"command": "action_name", "app": "app_name", "value": number, "path": "file_path", "query": "search_term", "text": "content", "process": "process_name", "dest": "destination_path", "package": "package_name", "city": "city_name", "url": "url", "ssid": "wifi_name", "instruction": "automation_instruction", "contact": "contact_name_or_number", "name": "task_or_symbol_name", "category": "memory_category", "repeat": "once|daily|weekly|monthly", "when": "YYYY-MM-DD HH:MM", "snippet_type": "react_component|fastapi_route|flask_route|test_file|plugin_template|cli_command", "framework": "framework_name", "dry_run": false}
+{"command": "action_name", "app": "app_name", "value": number, "path": "file_path", "query": "search_term", "text": "content", "message": "message_text", "process": "process_name", "dest": "destination_path", "package": "package_name", "city": "city_name", "url": "url", "ssid": "wifi_name", "instruction": "automation_instruction", "contact": "contact_name_or_number", "name": "task_or_symbol_name", "category": "memory_category", "repeat": "once|daily|weekly|monthly", "when": "YYYY-MM-DD HH:MM", "snippet_type": "react_component|fastapi_route|flask_route|test_file|plugin_template|cli_command", "framework": "framework_name", "dry_run": false}
 
 SUPPORTED COMMANDS (with intelligent synonyms):
 APPLICATIONS:
@@ -548,6 +575,7 @@ UTILITIES:
 - automate: "automate", "do this", "perform automation", "execute automation"
 - search_github: "search github", "find on github", "github search", "look for on github", "how many repositories does USER have", "github profile stats", "repo count for USER"
 - open_whatsapp_contact: "whatsapp", "message on whatsapp", "open whatsapp contact", "whatsapp contact"
+- send_whatsapp_message: "send whatsapp message", "message CONTACT on whatsapp", "send CONTACT MESSAGE on whatsapp"
 - preview_automation: "preview automation", "show automation steps", "dry run automation"
 - pause_automation: "pause automation"
 - resume_automation: "resume automation"
@@ -601,7 +629,8 @@ IMPORTANT:
 - Handle paths with ~ expansion
 - Be smart about app name variations (chrome/chromium, code/vscode)
 - If unsure about a parameter, use reasonable defaults
-- For automation requests, capture the full instruction in the "instruction" field"""
+- For automation requests, capture the full instruction in the "instruction" field
+- For WhatsApp send requests, use "send_whatsapp_message" and put the recipient in "contact" and the body in "message"."""
         
         context_messages = []
         if conversation_context:

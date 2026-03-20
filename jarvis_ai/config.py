@@ -9,31 +9,27 @@ class Config:
     """Configuration class for BenX"""
     
     # API Configuration
-    GROQ_KEY = os.getenv("GROQ_KEY", "").strip()
+    # IMPORTANT: Never commit your API key to GitHub!
+    # Set your API key as an environment variable:
+    # export GROQ_API_KEY='your_key_here'
+    GROQ_KEY = os.getenv("GROQ_API_KEY", os.getenv("GROQ_KEY", "")).strip()
     
-    # Updated models - removing deprecated and using current best models
+    # Updated models - Current working Groq models (2025)
     MODELS = [
-        # Primary models - Best quality (2024 models)
-        "llama-3.3-70b-versatile",  # Best overall - 128K context, multilingual
-        "llama-3.3-70b-instruct",  # Instruction-tuned, 128K context
-        "llama-3.1-70b-versatile",  # Fallback - strong understanding
-        
-        # Vision models for image understanding
-        "llama-3.2-90b-vision-preview",  # Vision capabilities, large context
-        "llama-3.2-11b-vision-preview",  # Faster vision model
-        
-        # Fast fallbacks
+        # Primary models - Best quality
+        "llama-3.3-70b-versatile",  # Best overall - 128K context
         "llama-3.1-8b-instant",  # Fast responses
-        "llama-3.2-3b-preview",  # Ultra-fast
-        
-        # Multimodal and specialized
-        "mixtral-8x7b-32768",  # Mixture of experts, 32K context
-        "gemma2-9b-it",  # Latest Gemma model
-        "qwen2.5-7b",  # Strong multilingual
+        "groq/compound",  # Groq's compound model
+        "groq/compound-mini",  # Faster compound model
+        "qwen/qwen3-32b",  # Qwen 3 32B
+        "meta-llama/llama-4-scout-17b-16e-instruct",  # Llama 4 Scout
+        "openai/gpt-oss-120b",  # OpenAI GPT OSS 120B
+        "openai/gpt-oss-20b",  # OpenAI GPT OSS 20B
+        "moonshotai/kimi-k2-instruct",  # Moonshot Kimi K2
     ]
     
     API_URL = "https://api.groq.com/openai/v1/chat/completions"
-    API_TIMEOUT = 60  # Increased for complex reasoning and vision
+    API_TIMEOUT = 120  # Increased timeout for complex reasoning
 
     # Safety/permissions
     # If True, require explicit confirmation for privileged or destructive actions.
@@ -51,10 +47,10 @@ class Config:
     VECTOR_DB_PATH = None  # Will be set in __init__
     MAX_CONTEXT_LENGTH = 128000  # Maximum context window
     
-    # Image processing
+    # Image processing - vision models (may not be available)
     IMAGE_MODELS = [
-        "llama-3.2-90b-vision-preview",
-        "llama-3.2-11b-vision-preview",
+        "llama-3.3-70b-versatile",  # Fallback to best text model
+        "groq/compound",  # Compound model
     ]
     MAX_IMAGE_SIZE = 2048  # Max image dimension for processing
     IMAGE_CACHE_DIR = None  # Will be set in __init__
@@ -118,4 +114,5 @@ class Config:
     SUCCESS_COLOR = "#34d399"  # Green
     ERROR_COLOR = "#f87171"  # Red
     WARNING_COLOR = "#fbbf24"  # Yellow
+
 
