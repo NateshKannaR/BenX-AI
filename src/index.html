@@ -6,49 +6,180 @@
   <title>BenX AI Assistant</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <main class="frame">
-    <h1 class="title">BenX</h1>
+  <div class="scene"></div>
 
-    <section class="layout">
-      <aside class="panel left-panel">
-        <h2>SYSTEM INFO</h2>
-        <ul class="stats">
-          <li><span>CPU:</span> <strong id="cpuUsage">15%</strong></li>
-          <li><span>Memory:</span> <strong id="memory">35%</strong></li>
-          <li><span>Disk:</span> <strong id="disk">69%</strong></li>
-          <li><span>Battery:</span> <strong id="battery">45% (Discharging)</strong></li>
-        </ul>
-        <div class="clock" id="clock">00:00:00</div>
+  <main class="shell">
+    <header class="topbar panel">
+      <div>
+        <p class="eyebrow">Adaptive Linux Control Interface</p>
+        <h1 class="title">BenX</h1>
+      </div>
+
+      <div class="topbar-meta">
+        <div class="status-pill">
+          <span class="status-dot"></span>
+          <span id="assistantMode">Operational</span>
+        </div>
+        <div class="time-block">
+          <span id="dateLabel">Mar 20, 2026</span>
+          <strong id="clock">00:00:00</strong>
+        </div>
+      </div>
+    </header>
+
+    <section class="dashboard">
+      <aside class="panel diagnostics-panel">
+        <div class="panel-header">
+          <div>
+            <p class="kicker">System Telemetry</p>
+            <h2>Diagnostics</h2>
+          </div>
+          <span class="panel-chip">Live</span>
+        </div>
+
+        <div class="metrics-grid">
+          <article class="metric-card">
+            <div class="metric-copy">
+              <span>CPU Load</span>
+              <strong id="cpuValue">15%</strong>
+            </div>
+            <div class="meter"><span id="cpuMeter"></span></div>
+          </article>
+
+          <article class="metric-card">
+            <div class="metric-copy">
+              <span>Memory</span>
+              <strong id="ramValue">35%</strong>
+            </div>
+            <div class="meter blue"><span id="ramMeter"></span></div>
+          </article>
+
+          <article class="metric-card">
+            <div class="metric-copy">
+              <span>Network</span>
+              <strong id="networkValue">320 KB/s</strong>
+            </div>
+            <div class="meter violet"><span id="networkMeter"></span></div>
+          </article>
+
+          <article class="metric-card">
+            <div class="metric-copy">
+              <span>GPU Load</span>
+              <strong id="gpuValue">24%</strong>
+            </div>
+            <div class="meter amber"><span id="gpuMeter"></span></div>
+          </article>
+
+          <article class="metric-card">
+            <div class="metric-copy">
+              <span>Thermals</span>
+              <strong id="tempValue">46°C</strong>
+            </div>
+            <div class="meter red"><span id="tempMeter"></span></div>
+          </article>
+
+          <article class="metric-card">
+            <div class="metric-copy">
+              <span>Battery</span>
+              <strong id="batteryValue">82%</strong>
+            </div>
+            <div class="meter"><span id="batteryMeter"></span></div>
+          </article>
+        </div>
+
+        <div class="subpanel">
+          <div class="subpanel-header">
+            <h3>Queued Routines</h3>
+            <span id="queuedCount">03</span>
+          </div>
+          <ul class="task-list" id="taskList">
+            <li>Analyze current project structure</li>
+            <li>Monitor clipboard and voice triggers</li>
+            <li>Prepare shell automation preview</li>
+          </ul>
+        </div>
       </aside>
 
-      <section class="center-stage" aria-label="BenX symbol stage">
-        <div class="corner tl"></div>
-        <div class="corner tr"></div>
-        <div class="corner bl"></div>
-        <div class="corner br"></div>
+      <section class="panel hero-panel" aria-label="BenX command stage">
+        <div class="hero-grid">
+          <div class="brand-stage">
+            <div class="corner tl"></div>
+            <div class="corner tr"></div>
+            <div class="corner bl"></div>
+            <div class="corner br"></div>
 
-        <div class="logo-wrap">
-          <div class="ring outer"></div>
-          <div class="ring inner"></div>
-          <div class="benx-mark"></div>
+            <div class="logo-wrap">
+              <div class="ring outer"></div>
+              <div class="ring middle"></div>
+              <div class="ring inner"></div>
+              <div class="benx-wordmark" aria-label="BenX logo">
+                <span class="wordmark-back">BENX</span>
+                <span class="wordmark-main">BENX</span>
+                <span class="wordmark-accent">BENX</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="activity-panel">
+          <div class="panel-header">
+            <div>
+              <p class="kicker">Mission Stream</p>
+              <h3>Recent Activity</h3>
+            </div>
+            <span class="panel-chip alt">Synced</span>
+          </div>
+
+          <div class="activity-list" id="activityList">
+            <article class="activity-item">
+              <span class="activity-time" id="chatTs">[00:00:00]</span>
+              <div>
+                <strong>BenX</strong>
+                <p>Interface ready. Awaiting your next command.</p>
+              </div>
+            </article>
+          </div>
         </div>
       </section>
 
-      <aside class="panel right-panel">
-        <h2>CHAT</h2>
-        <div class="chat-window">
-          <p><span class="timestamp" id="chatTs">[00:00:00]</span> BenX:</p>
-          <p>Hello! I'm BenX, your AI assistant. How can I help you?</p>
+      <aside class="panel chat-panel">
+        <div class="panel-header">
+          <div>
+            <p class="kicker">Conversation Node</p>
+            <h2>Assistant Chat</h2>
+          </div>
+          <span class="panel-chip">Secure</span>
         </div>
-        <input class="chat-input" type="text" aria-label="chat input" />
+
+        <div class="chat-window" id="chatWindow">
+          <article class="chat-message assistant">
+            <div class="message-meta">
+              <strong>BenX</strong>
+              <span class="timestamp" id="heroTimestamp">[00:00:00]</span>
+            </div>
+            <p>Hello. I can inspect code, automate tasks, analyze your screen, and coordinate system actions.</p>
+          </article>
+        </div>
+
+        <div class="suggestions">
+          <button class="suggestion-chip" data-command="scan my project for issues">Scan project</button>
+          <button class="suggestion-chip" data-command="check my battery and cpu usage">Check resources</button>
+          <button class="suggestion-chip" data-command="help me automate a repetitive task">Automate task</button>
+        </div>
+
+        <label class="composer" for="chatInput">
+          <textarea id="chatInput" class="chat-input" rows="3" placeholder="Type a command, question, or task for BenX..."></textarea>
+        </label>
+
         <div class="actions">
-          <button>SEND</button>
-          <button>VOICE</button>
-          <button class="danger">CLEAR</button>
+          <button class="action-btn" id="sendBtn">Send</button>
+          <button class="action-btn voice" id="voiceBtn">Voice</button>
+          <button class="action-btn danger" id="clearBtn">Clear</button>
         </div>
       </aside>
     </section>

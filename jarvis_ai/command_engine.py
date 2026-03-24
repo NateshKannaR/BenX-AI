@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 try:
     from PIL import Image
     import pytesseract
+    import os
+    # Set TESSDATA_PREFIX if not already set
+    if 'TESSDATA_PREFIX' not in os.environ:
+        os.environ['TESSDATA_PREFIX'] = '/usr/share/tessdata/'
     OCR_AVAILABLE = True
 except ImportError:
     OCR_AVAILABLE = False
@@ -41,6 +45,38 @@ class CommandEngine:
         "on", "in", "for", "the", "a", "an", "of", "find", "search", "count",
         "number", "show", "me", "public", "stats", "stat",
     }
+
+    @staticmethod
+    def _normalize_phone_number(contact: str) -> str:
+        if not contact:
+            return ""
+
+        trimmed = contact.strip()
+        prefix = "+" if trimmed.startswith("+") else ""
+        digits = re.sub(r"\D", "", trimmed)
+        if len(digits) < 8:
+            return ""
+        return f"{prefix}{digits}" if prefix else digits
+
+    @staticmethod
+    def _looks_like_phone_number(contact: str) -> bool:
+        return bool(CommandEngine._normalize_phone_number(contact))
+
+    @staticmethod
+    def _press_enter_after_delay(delay_seconds: float = 8.0) -> None:
+        if not AUTOMATION_AVAILABLE:
+            return
+
+        def _send():
+            try:
+                import time
+                time.sleep(delay_seconds)
+                pyautogui.press("enter")
+            except Exception as exc:
+                logger.warning(f"WhatsApp auto-send failed: {exc}")
+
+        import threading
+        threading.Thread(target=_send, daemon=True).start()
 
     @staticmethod
     def _github_api_get(path: str):
@@ -543,10 +579,22 @@ class CommandEngine:
     
     @staticmethod
     def take_screenshot() -> str:
+        import time
         tool = find_tool(Config.TOOLS["screenshot"])
         if not tool:
             return "❌ No screenshot tool found"
-        
+
+        # Hide any BenX GTK windows so they don't appear in the screenshot
+        try:
+            import gi
+            gi.require_version('Gtk', '4.0')
+            from gi.repository import GLib
+            # Signal all BenX windows to hide, wait for compositor to redraw
+            success_hide, _ = run_cmd("hyprctl dispatch focuswindow class:^((?!BenX).)*$", shell=False)
+        except Exception:
+            pass
+        time.sleep(0.4)  # Give compositor time to redraw without BenX
+
         path = Config.SCREENSHOT_PATH
         success, _ = run_cmd(f"{tool} {path}")
         return f"✅ Screenshot saved to {path}" if success else "❌ Failed to take screenshot"
@@ -802,34 +850,89 @@ class CommandEngine:
     
     @staticmethod
     def open_whatsapp_contact(contact: str) -> str:
-        """Open WhatsApp and search for a contact"""
+        """Open WhatsApp chat for a phone number or WhatsApp Web for manual contact search."""
         if not contact:
             return "❌ No contact specified"
-        
-        import urllib.parse
-        encoded_contact = urllib.parse.quote(contact)
-        url = f"https://web.whatsapp.com/send?text=&phone={encoded_contact}"
+
+        normalized_phone = CommandEngine._normalize_phone_number(contact)
+        if normalized_phone:
+            url = f"https://web.whatsapp.com/send?phone={urllib.parse.quote(normalized_phone)}"
+        else:
+            url = "https://web.whatsapp.com"
+
         success, _ = run_cmd(f"xdg-open {shlex.quote(url)}")
-        return f"✅ Opening WhatsApp for: {contact}" if success else "❌ Failed to open WhatsApp"
+        if not success:
+            return "❌ Failed to open WhatsApp"
+
+        if normalized_phone:
+            return f"✅ Opening WhatsApp chat for {contact}"
+        return f"✅ Opened WhatsApp Web. Search for '{contact}' manually."
+
+    @staticmethod
+    def send_whatsapp_message(contact: str, message: str) -> str:
+        """Send a WhatsApp message immediately when a phone number is available."""
+        if not contact:
+            return "❌ No WhatsApp contact or phone number specified"
+        if not message:
+            return "❌ No WhatsApp message specified"
+
+        normalized_phone = CommandEngine._normalize_phone_number(contact)
+        encoded_message = urllib.parse.quote(message)
+
+        if not normalized_phone:
+            url = "https://web.whatsapp.com"
+            success, _ = run_cmd(f"xdg-open {shlex.quote(url)}")
+            if not success:
+                return "❌ Failed to open WhatsApp"
+            return (
+                f"⚠️ Opened WhatsApp Web, but immediate send needs a phone number. "
+                f"Search for '{contact}', paste the message, and press Enter."
+            )
+
+        url = (
+            "https://web.whatsapp.com/send"
+            f"?phone={urllib.parse.quote(normalized_phone)}&text={encoded_message}"
+        )
+        success, _ = run_cmd(f"xdg-open {shlex.quote(url)}")
+        if not success:
+            return "❌ Failed to open WhatsApp"
+
+        if AUTOMATION_AVAILABLE:
+            CommandEngine._press_enter_after_delay()
+            return f"✅ Sending WhatsApp message to {contact} now"
+
+        return (
+            f"✅ Opened WhatsApp chat for {contact} with the message filled in. "
+            "Press Enter once the page loads to send it."
+        )
     
     @staticmethod
     def read_screen_text() -> str:
-        """Extract text from screen using OCR"""
+        """Extract and format text from screen using OCR"""
         if not OCR_AVAILABLE:
-            return "❌ OCR not available. Install: pip install pytesseract Pillow"
-        
+            raise ImportError("OCR not available. Install: pip install pytesseract Pillow")
+
         result = CommandEngine.take_screenshot()
         if "❌" in result:
             return result
-        
+
         try:
             img = Image.open(Config.SCREENSHOT_PATH)
-            text = pytesseract.image_to_string(img)
-            
-            if not text.strip():
+            raw = pytesseract.image_to_string(img).strip()
+
+            if not raw:
                 return "📄 No text found on screen"
-            
-            return f"📄 Screen Text:\n{text[:1000]}"
+
+            # Filter out noise: keep only lines with real content
+            lines = [
+                line.strip() for line in raw.splitlines()
+                if len(line.strip()) > 2 and not all(c in r'|_-=\/' for c in line.strip())
+            ]
+
+            if not lines:
+                return "📄 No readable text found on screen"
+
+            return "📄 Screen Text:\n" + "\n".join(lines[:60])
         except Exception as e:
             return f"❌ OCR error: {str(e)}"
     
@@ -920,6 +1023,134 @@ class CommandEngine:
             return f"✅ Installed Python packages: {', '.join(package_list)}"
         else:
             return f"❌ Failed to install packages. Error: {output[:200]}"
+
+    # ── Bluetooth ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def bluetooth_list_paired() -> str:
+        from jarvis_ai.bluetooth_manager import BluetoothManager
+        return BluetoothManager.list_paired()
+
+    @staticmethod
+    def bluetooth_list_available() -> str:
+        from jarvis_ai.bluetooth_manager import BluetoothManager
+        return BluetoothManager.list_available()
+
+    @staticmethod
+    def bluetooth_connect(device: str) -> str:
+        from jarvis_ai.bluetooth_manager import BluetoothManager
+        return BluetoothManager.connect(device)
+
+    @staticmethod
+    def bluetooth_disconnect(device: str) -> str:
+        from jarvis_ai.bluetooth_manager import BluetoothManager
+        return BluetoothManager.disconnect(device)
+
+    @staticmethod
+    def bluetooth_pair(mac: str) -> str:
+        from jarvis_ai.bluetooth_manager import BluetoothManager
+        return BluetoothManager.pair(mac)
+
+    @staticmethod
+    def bluetooth_status() -> str:
+        from jarvis_ai.bluetooth_manager import BluetoothManager
+        return BluetoothManager.status()
+
+    @staticmethod
+    def bluetooth_power(on: bool) -> str:
+        from jarvis_ai.bluetooth_manager import BluetoothManager
+        return BluetoothManager.power(on)
+
+    # ── Notifications ───────────────────────────────────────────────────
+
+    @staticmethod
+    def send_notification(title: str, body: str = "", urgency: str = "normal") -> str:
+        from jarvis_ai.notification_sender import NotificationSender
+        return NotificationSender.send(title, body, urgency)
+
+    # ── Email ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def email_read_inbox(count: int = 5) -> str:
+        from jarvis_ai.email_manager import EmailManager
+        return EmailManager.read_inbox(count)
+
+    @staticmethod
+    def email_read_body(index: int = 1) -> str:
+        from jarvis_ai.email_manager import EmailManager
+        return EmailManager.read_email_body(index)
+
+    @staticmethod
+    def email_send(to: str, subject: str, body: str) -> str:
+        from jarvis_ai.email_manager import EmailManager
+        return EmailManager.send(to, subject, body)
+
+    @staticmethod
+    def email_search(query: str) -> str:
+        from jarvis_ai.email_manager import EmailManager
+        return EmailManager.search_emails(query)
+
+    # ── Browser Automation ──────────────────────────────────────────────
+
+    @staticmethod
+    def browser_open(url: str) -> str:
+        from jarvis_ai.browser_automation import BrowserAutomation
+        return BrowserAutomation.open_url(url)
+
+    @staticmethod
+    def browser_scrape(url: str, selector: str = "body") -> str:
+        from jarvis_ai.browser_automation import BrowserAutomation
+        return BrowserAutomation.scrape(url, selector)
+
+    @staticmethod
+    def browser_screenshot(url: str) -> str:
+        from jarvis_ai.browser_automation import BrowserAutomation
+        return BrowserAutomation.screenshot(url)
+
+    @staticmethod
+    def browser_search(query: str) -> str:
+        from jarvis_ai.browser_automation import BrowserAutomation
+        return BrowserAutomation.search_and_scrape(query)
+
+    @staticmethod
+    def list_workspaces() -> str:
+        from jarvis_ai.workspace_monitor import WorkspaceMonitor
+        return WorkspaceMonitor.list_workspaces_summary()
+
+    @staticmethod
+    def switch_workspace(ws_id: int) -> str:
+        from jarvis_ai.workspace_monitor import WorkspaceMonitor
+        return WorkspaceMonitor.switch_workspace(ws_id)
+
+    @staticmethod
+    def move_to_workspace(ws_id: int) -> str:
+        from jarvis_ai.workspace_monitor import WorkspaceMonitor
+        return WorkspaceMonitor.move_window_to_workspace(ws_id)
+
+    @staticmethod
+    def focus_window(title: str) -> str:
+        from jarvis_ai.workspace_monitor import WorkspaceMonitor
+        return WorkspaceMonitor.focus_window_by_title(title)
+
+    @staticmethod
+    def find_app_workspace(app: str) -> str:
+        from jarvis_ai.workspace_monitor import WorkspaceMonitor
+        return WorkspaceMonitor.find_app_workspace(app)
+
+    @staticmethod
+    def close_active_window() -> str:
+        from jarvis_ai.workspace_monitor import WorkspaceMonitor
+        return WorkspaceMonitor.close_active_window()
+
+    @staticmethod
+    def toggle_fullscreen() -> str:
+        from jarvis_ai.workspace_monitor import WorkspaceMonitor
+        return WorkspaceMonitor.toggle_fullscreen()
+
+    @staticmethod
+    def toggle_float() -> str:
+        from jarvis_ai.workspace_monitor import WorkspaceMonitor
+        return WorkspaceMonitor.toggle_float()
 
 
 

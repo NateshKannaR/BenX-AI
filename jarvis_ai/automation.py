@@ -289,3 +289,5 @@ Return ONLY a valid JSON array like:
                 json.dump(payload, handle, indent=2)
         except Exception as exc:
             logger.warning(f"Failed to save automation state: {exc}")
+
+

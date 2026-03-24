@@ -14,22 +14,37 @@ class Config:
     # export GROQ_API_KEY='your_key_here'
     GROQ_KEY = os.getenv("GROQ_API_KEY", os.getenv("GROQ_KEY", "")).strip()
     
-    # Updated models - Current working Groq models (2025)
+    # ── Model routing: task-type → best model ──────────────────────
     MODELS = [
-        # Primary models - Best quality
-        "llama-3.3-70b-versatile",  # Best overall - 128K context
-        "llama-3.1-8b-instant",  # Fast responses
-        "groq/compound",  # Groq's compound model
-        "groq/compound-mini",  # Faster compound model
-        "qwen/qwen3-32b",  # Qwen 3 32B
-        "meta-llama/llama-4-scout-17b-16e-instruct",  # Llama 4 Scout
-        "openai/gpt-oss-120b",  # OpenAI GPT OSS 120B
-        "openai/gpt-oss-20b",  # OpenAI GPT OSS 20B
-        "moonshotai/kimi-k2-instruct",  # Moonshot Kimi K2
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "groq/compound",
+        "groq/compound-mini",
+        "qwen/qwen3-32b",
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+        "moonshotai/kimi-k2-instruct",
     ]
-    
+
+    # Ordered fallback lists per task type
+    MODEL_ROUTES = {
+        "vision":  ["meta-llama/llama-4-scout-17b-16e-instruct", "llama-3.3-70b-versatile", "groq/compound"],
+        "code":    ["qwen/qwen3-32b", "openai/gpt-oss-120b", "llama-3.3-70b-versatile"],
+        "chat":    ["llama-3.3-70b-versatile", "groq/compound", "llama-3.1-8b-instant"],
+        "fast":    ["llama-3.1-8b-instant", "groq/compound-mini", "llama-3.3-70b-versatile"],
+        "reason":  ["openai/gpt-oss-120b", "moonshotai/kimi-k2-instruct", "llama-3.3-70b-versatile"],
+    }
+
     API_URL = "https://api.groq.com/openai/v1/chat/completions"
-    API_TIMEOUT = 120  # Increased timeout for complex reasoning
+    API_TIMEOUT = 120
+
+    # Email (IMAP/SMTP)
+    EMAIL_ADDRESS  = os.getenv("BENX_EMAIL", "").strip()
+    EMAIL_PASSWORD = os.getenv("BENX_EMAIL_PASSWORD", "").strip()
+    EMAIL_IMAP     = os.getenv("BENX_IMAP", "imap.gmail.com").strip()
+    EMAIL_SMTP     = os.getenv("BENX_SMTP", "smtp.gmail.com").strip()
+    EMAIL_SMTP_PORT = int(os.getenv("BENX_SMTP_PORT", "587"))
 
     # Safety/permissions
     # If True, require explicit confirmation for privileged or destructive actions.
@@ -49,6 +64,7 @@ class Config:
     
     # Image processing - vision models (may not be available)
     IMAGE_MODELS = [
+        "meta-llama/llama-4-scout-17b-16e-instruct",  # Llama 4 Scout - vision capable
         "llama-3.3-70b-versatile",  # Fallback to best text model
         "groq/compound",  # Compound model
     ]

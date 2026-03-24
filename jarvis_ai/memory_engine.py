@@ -1,96 +1,118 @@
 """
-Advanced Memory Engine - Context-aware long-term memory
+BenX Memory Engine - Persistent user facts + smart recall
 """
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import Optional
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
 
 class MemoryEngine:
-    """Advanced memory system with context awareness"""
-    
     def __init__(self, memory_file: Path):
         self.memory_file = memory_file
-        self.short_term = []  # Last 50 interactions
-        self.long_term = defaultdict(list)  # Categorized memories
-        self.facts = {}  # User facts (name, preferences, etc.)
+        self.facts_file = memory_file.parent / "user_facts.json"
+        self.short_term = []
+        self.long_term = defaultdict(list)
+        self.facts = {}
         self.load_memory()
-    
+
     def load_memory(self):
-        """Load memory from disk"""
         try:
             if self.memory_file.exists():
-                with open(self.memory_file, 'r') as f:
-                    data = json.load(f)
-                    self.short_term = data.get('short_term', [])[-50:]
-                    self.long_term = defaultdict(list, data.get('long_term', {}))
-                    self.facts = data.get('facts', {})
+                data = json.loads(self.memory_file.read_text())
+                self.short_term = data.get("short_term", [])[-100:]
+                self.long_term = defaultdict(list, data.get("long_term", {}))
         except Exception as e:
-            logger.error(f"Failed to load memory: {e}")
-    
-    def save_memory(self):
-        """Save memory to disk"""
+            logger.error(f"Memory load failed: {e}")
         try:
-            with open(self.memory_file, 'w') as f:
-                json.dump({
-                    'short_term': self.short_term[-50:],
-                    'long_term': dict(self.long_term),
-                    'facts': self.facts
-                }, f, indent=2)
+            if self.facts_file.exists():
+                self.facts = json.loads(self.facts_file.read_text())
+        except Exception:
+            self.facts = {}
+
+    def save_memory(self):
+        try:
+            self.memory_file.write_text(json.dumps({
+                "short_term": self.short_term[-100:],
+                "long_term": dict(self.long_term),
+            }, indent=2))
         except Exception as e:
-            logger.error(f"Failed to save memory: {e}")
-    
-    def remember(self, user_input: str, response: str, category: str = 'general'):
-        """Store interaction in memory"""
-        memory = {
-            'timestamp': datetime.now().isoformat(),
-            'user': user_input,
-            'assistant': response,
-            'category': category
+            logger.error(f"Memory save failed: {e}")
+
+    def save_facts(self):
+        try:
+            self.facts_file.write_text(json.dumps(self.facts, indent=2))
+        except Exception as e:
+            logger.error(f"Facts save failed: {e}")
+
+    def remember(self, user_input: str, response: str, category: str = "general"):
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "user": user_input,
+            "assistant": response,
+            "category": category
         }
-        self.short_term.append(memory)
-        self.long_term[category].append(memory)
+        self.short_term.append(entry)
+        self.long_term[category].append(entry)
+        # Auto-extract facts from conversation
+        self._auto_extract_facts(user_input)
         self.save_memory()
-    
-    def recall(self, query: str, limit: int = 5) -> List[Dict]:
-        """Recall relevant memories"""
-        query_lower = query.lower()
-        relevant = []
-        
-        for memory in reversed(self.short_term):
-            if query_lower in memory['user'].lower() or query_lower in memory['assistant'].lower():
-                relevant.append(memory)
-                if len(relevant) >= limit:
-                    break
-        
-        return relevant
-    
+
+    def _auto_extract_facts(self, text: str):
+        """Auto-detect user facts from natural language."""
+        import re
+        patterns = [
+            (r"my name is (\w+)", "user_name"),
+            (r"i(?:'m| am) (\w+)", "user_name"),
+            (r"call me (\w+)", "user_name"),
+            (r"i(?:'m| am) a[n]? ([\w\s]+)", "user_role"),
+            (r"i work (?:at|for|in) ([\w\s]+)", "workplace"),
+            (r"i(?:'m| am) (?:from|in|at) ([\w\s]+)", "location"),
+            (r"i prefer ([\w\s]+)", "preference"),
+            (r"i use ([\w\s]+) for", "tool_preference"),
+            (r"my (?:email|mail) is ([\w@.]+)", "email"),
+            (r"my project is ([\w\s/~.]+)", "current_project"),
+        ]
+        t = text.lower()
+        for pattern, key in patterns:
+            m = re.search(pattern, t)
+            if m:
+                val = m.group(1).strip()
+                if len(val) > 1 and val not in ("a", "an", "the"):
+                    self.facts[key] = val
+                    self.save_facts()
+
     def learn_fact(self, key: str, value: str):
-        """Learn a fact about the user"""
-        self.facts[key] = {
-            'value': value,
-            'learned_at': datetime.now().isoformat()
-        }
-        self.save_memory()
-    
+        self.facts[key.lower().strip()] = value
+        self.save_facts()
+
     def get_fact(self, key: str) -> Optional[str]:
-        """Retrieve a learned fact"""
-        fact = self.facts.get(key)
-        return fact['value'] if fact else None
-    
+        return self.facts.get(key.lower().strip())
+
+    def recall(self, query: str, limit: int = 5):
+        q = query.lower()
+        return [
+            m for m in reversed(self.short_term)
+            if q in m.get("user", "").lower() or q in m.get("assistant", "").lower()
+        ][:limit]
+
+    def get_user_facts_summary(self) -> str:
+        if not self.facts:
+            return ""
+        lines = ["Known about user:"]
+        for k, v in self.facts.items():
+            lines.append(f"  - {k.replace('_', ' ')}: {v}")
+        return "\n".join(lines)
+
     def get_context_summary(self) -> str:
-        """Get summary of recent context"""
         if not self.short_term:
-            return "No recent context"
-        
-        recent = self.short_term[-5:]
-        summary = "Recent context:\n"
-        for mem in recent:
-            summary += f"- User: {mem['user'][:50]}...\n"
-        
-        return summary
+            return ""
+        recent = self.short_term[-3:]
+        lines = ["Recent context:"]
+        for m in recent:
+            lines.append(f"  - {m['user'][:60]}")
+        return "\n".join(lines)

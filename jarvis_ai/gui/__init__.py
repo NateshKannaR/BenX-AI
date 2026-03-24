@@ -1,11 +1,19 @@
 """GUI Package"""
 
-try:
-    from .jarvis_ui import JarvisUI, GUI_AVAILABLE
-except ImportError:
-    GUI_AVAILABLE = False
+# DO NOT import jarvis_ui here - it uses tkinter which may conflict with GTK4
+# Import only when needed
 
-__all__ = ['JarvisUI', 'GUI_AVAILABLE']
+GUI_AVAILABLE = False
+
+try:
+    import tkinter as tk
+    GUI_AVAILABLE = True
+except ImportError:
+    pass
+
+__all__ = ['GUI_AVAILABLE']
+
+
 
 
 

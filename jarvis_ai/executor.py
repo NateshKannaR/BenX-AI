@@ -14,6 +14,7 @@ from jarvis_ai.config import Config
 from jarvis_ai.plugin_manager import PluginManager
 from jarvis_ai.scheduler import Scheduler
 from jarvis_ai.developer_assistant import DeveloperAssistant
+from jarvis_ai.dependency_installer import DependencyInstaller
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +114,10 @@ class CommandExecutor:
     def execute(cmd_json: str, ai_engine: AIEngine = None, user_input: str = "", confirm_cb=None) -> str:
         """Execute a JSON command"""
         try:
-            # Check if this is a project task (before parsing JSON)
+            # Parse command first
+            obj = json.loads(cmd_json)
+            action = obj.get("command", "none")
+            # Check if this is a project task
             if ai_engine:
                 # Initialize orchestrator if not exists
                 if not hasattr(ai_engine, 'project_orchestrator'):
@@ -231,6 +235,10 @@ class CommandExecutor:
                 "screen_aware_click": lambda: CommandExecutor._screen_aware_click(obj.get("text", obj.get("query", obj.get("name", ""))), ai_engine),
                 "search_github": lambda: CommandEngine.search_github(obj.get("query", "")),
                 "open_whatsapp_contact": lambda: CommandEngine.open_whatsapp_contact(obj.get("contact", "")),
+                "send_whatsapp_message": lambda: CommandEngine.send_whatsapp_message(
+                    obj.get("contact", ""),
+                    obj.get("message", obj.get("text", "")),
+                ),
                 "schedule_task": lambda: CommandExecutor._schedule_task(obj, user_input, ai_engine),
                 "list_scheduled_tasks": lambda: CommandExecutor._list_scheduled_tasks(),
                 "cancel_scheduled_task": lambda: CommandExecutor._cancel_scheduled_task(obj.get("name", obj.get("text", ""))),
@@ -256,10 +264,86 @@ class CommandExecutor:
                 "install_python_package": lambda: CommandEngine.install_python_package(obj.get("package", "")),
                 "update_system": lambda: CommandEngine.update_system(),
                 "check_updates": lambda: CommandEngine.check_updates(),
+
+                # Workspace / Window Management
+                "list_workspaces": lambda: CommandEngine.list_workspaces(),
+                "switch_workspace": lambda: CommandEngine.switch_workspace(int(obj.get("value", 1))),
+                "move_to_workspace": lambda: CommandEngine.move_to_workspace(int(obj.get("value", 1))),
+                "focus_window": lambda: CommandEngine.focus_window(obj.get("app", obj.get("query", ""))),
+                "find_app_workspace": lambda: CommandEngine.find_app_workspace(obj.get("app", obj.get("query", ""))),
+                "close_active_window": lambda: CommandEngine.close_active_window(),
+                "toggle_fullscreen": lambda: CommandEngine.toggle_fullscreen(),
+                "toggle_float": lambda: CommandEngine.toggle_float(),
+
+                # Bluetooth
+                "bluetooth_list_paired": lambda: CommandEngine.bluetooth_list_paired(),
+                "bluetooth_list_available": lambda: CommandEngine.bluetooth_list_available(),
+                "bluetooth_connect": lambda: CommandEngine.bluetooth_connect(obj.get("device", obj.get("query", ""))),
+                "bluetooth_disconnect": lambda: CommandEngine.bluetooth_disconnect(obj.get("device", obj.get("query", ""))),
+                "bluetooth_pair": lambda: CommandEngine.bluetooth_pair(obj.get("device", obj.get("query", ""))),
+                "bluetooth_status": lambda: CommandEngine.bluetooth_status(),
+                "bluetooth_on": lambda: CommandEngine.bluetooth_power(True),
+                "bluetooth_off": lambda: CommandEngine.bluetooth_power(False),
+
+                # Notifications
+                "send_notification": lambda: CommandEngine.send_notification(
+                    obj.get("title", obj.get("text", "BenX")),
+                    obj.get("body", obj.get("message", "")),
+                    obj.get("urgency", "normal")
+                ),
+
+                # Email
+                "email_inbox": lambda: CommandEngine.email_read_inbox(int(obj.get("value", 5))),
+                "email_read": lambda: CommandEngine.email_read_body(int(obj.get("value", 1))),
+                "email_send": lambda: CommandEngine.email_send(
+                    obj.get("to", obj.get("contact", "")),
+                    obj.get("subject", obj.get("title", "")),
+                    obj.get("body", obj.get("text", obj.get("message", "")))
+                ),
+                "email_search": lambda: CommandEngine.email_search(obj.get("query", "")),
+
+                # Browser Automation
+                "browser_open": lambda: CommandEngine.browser_open(obj.get("url", "")),
+                "browser_scrape": lambda: CommandEngine.browser_scrape(obj.get("url", ""), obj.get("query", "body")),
+                "browser_screenshot": lambda: CommandEngine.browser_screenshot(obj.get("url", "")),
+                "browser_search": lambda: CommandEngine.browser_search(obj.get("query", "")),
             }
             
             if action in command_map:
-                result = command_map[action]()
+                try:
+                    result = command_map[action]()
+                except (ImportError, ModuleNotFoundError) as import_error:
+                    # Dependency missing - try to install
+                    logger.info(f"Dependency missing for {action}: {str(import_error)}")
+                    install_result = DependencyInstaller.auto_install_for_command(action, confirm_cb)
+                    if install_result:
+                        if "cancelled" in install_result.lower():
+                            return install_result
+                        # Retry the command after installation
+                        try:
+                            result = command_map[action]()
+                        except Exception as retry_error:
+                            return f"❌ Command failed even after installing dependencies: {str(retry_error)}"
+                    else:
+                        return f"❌ {str(import_error)}"
+                except Exception as cmd_error:
+                    # Check if error message indicates missing dependencies
+                    error_str = str(cmd_error).lower()
+                    if any(keyword in error_str for keyword in ["no module", "not available", "not installed", "install:"]):
+                        logger.info(f"Possible dependency issue for {action}: {str(cmd_error)}")
+                        install_result = DependencyInstaller.auto_install_for_command(action, confirm_cb)
+                        if install_result:
+                            if "cancelled" in install_result.lower():
+                                return install_result
+                            # Retry the command after installation
+                            try:
+                                result = command_map[action]()
+                            except Exception as retry_error:
+                                return f"❌ Command failed even after installing dependencies: {str(retry_error)}"
+                        else:
+                            raise cmd_error
+                    else:
+                        raise cmd_error
                 
                 # Self-reflect and learn
                 if ai_engine and ai_engine.learning_engine:
@@ -293,31 +377,187 @@ class CommandExecutor:
     @staticmethod
     def _analyze_screen_with_ai(ai_engine: AIEngine) -> str:
         """Analyze screen with AI vision"""
-        if not ai_engine:
-            from jarvis_ai.command_engine import CommandEngine
-            return CommandEngine.take_screenshot()
-        
-        from jarvis_ai.command_engine import CommandEngine
-        result = CommandEngine.take_screenshot()
-        if "❌" in result:
-            return result
-        
         try:
             from PIL import Image
             import pyautogui
-            
+        except ImportError as e:
+            missing = str(e).split("'")[1] if "'" in str(e) else "required packages"
+            raise ImportError(f"Screen analysis requires: pyautogui, pytesseract, Pillow. Missing: {missing}")
+
+        from jarvis_ai.command_engine import CommandEngine
+        result = CommandEngine.take_screenshot()  # already hides BenX window
+        if "❌" in result:
+            return result
+
+        try:
             img = Image.open(CommandExecutor._get_screenshot_path())
             screen_width, screen_height = pyautogui.size()
-            
-            # Use AI vision for analysis
-            analysis = ai_engine.analyze_image(
-                CommandExecutor._get_screenshot_path(),
-                "Analyze this screen. Describe what you see, including applications, UI elements, text, and actionable items."
-            )
-            
-            return f"📸 Screen Analysis:\n{analysis}"
+
+            try:
+                import pytesseract, os
+                if 'TESSDATA_PREFIX' not in os.environ:
+                    os.environ['TESSDATA_PREFIX'] = '/usr/share/tessdata/'
+                ocr_text = pytesseract.image_to_string(img)
+            except ImportError:
+                raise ImportError("Screen analysis requires pytesseract. Install: pip install pytesseract")
+            except Exception as ocr_error:
+                error_msg = str(ocr_error)
+                if 'eng.traineddata' in error_msg or 'tessdata' in error_msg:
+                    ocr_text = "OCR Error: run ./install_tesseract_eng.sh to install language data"
+                else:
+                    ocr_text = f"OCR failed: {error_msg}"
+
+            # Use AI vision if available, else fall back to formatted OCR
+            if ai_engine:
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                    img.save(tmp.name)
+                    tmp_path = tmp.name
+                try:
+                    vision = ai_engine.analyze_image(
+                        tmp_path,
+                        f"Analyze this screenshot. Describe what applications, windows, and content are visible. "
+                        f"OCR also found this text: {ocr_text[:500]}"
+                    )
+                    return f"📸 Screen Analysis:\n\n{vision}\n\n📝 OCR Text (raw):\n{ocr_text[:800]}"
+                finally:
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
+
+            return CommandExecutor._format_screen_analysis(screen_width, screen_height, ocr_text, img)
+
+        except ImportError:
+            raise
         except Exception as e:
             return f"❌ Screen analysis error: {str(e)}"
+    
+    @staticmethod
+    def _format_screen_analysis(width: int, height: int, ocr_text: str, image) -> str:
+        """Format screen analysis in a beautiful, readable way"""
+        import re
+        
+        # Clean up OCR text
+        lines = [line.strip() for line in ocr_text.split('\n') if line.strip()]
+        
+        # Detect content types
+        urls = []
+        times = []
+        phone_numbers = []
+        emails = []
+        file_names = []
+        messages = []
+        other_text = []
+        
+        url_pattern = r'https?://[^\s]+|www\.[^\s]+|[a-z]+\.[a-z]+\.[a-z]+/[^\s]*'
+        time_pattern = r'\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm|AM|PM)?\b'
+        phone_pattern = r'\+?\d[\d\s-]{8,}'
+        email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+        file_pattern = r'[\w-]+\.(?:pdf|doc|docx|txt|png|jpg|jpeg|gif|zip|rar|mp4|mp3)'
+        
+        for line in lines:
+            # Check for URLs
+            if re.search(url_pattern, line, re.IGNORECASE):
+                url_matches = re.findall(url_pattern, line, re.IGNORECASE)
+                urls.extend(url_matches)
+            
+            # Check for times
+            time_matches = re.findall(time_pattern, line)
+            if time_matches:
+                times.extend(time_matches)
+            
+            # Check for phone numbers
+            phone_matches = re.findall(phone_pattern, line)
+            if phone_matches:
+                phone_numbers.extend([p.strip() for p in phone_matches if len(p.replace(' ', '').replace('-', '')) >= 10])
+            
+            # Check for emails
+            email_matches = re.findall(email_pattern, line)
+            if email_matches:
+                emails.extend(email_matches)
+            
+            # Check for file names
+            file_matches = re.findall(file_pattern, line, re.IGNORECASE)
+            if file_matches:
+                file_names.extend(file_matches)
+            
+            # Categorize remaining text
+            if len(line) > 10 and not any(re.search(p, line) for p in [url_pattern, file_pattern]):
+                if ':' in line and len(line) < 100:
+                    messages.append(line)
+                else:
+                    other_text.append(line)
+        
+        # Build beautiful formatted output
+        output = []
+        output.append("╔═══════════════════════════════════════════════════════════╗")
+        output.append("║           📸 SCREEN ANALYSIS REPORT                       ║")
+        output.append("╚═══════════════════════════════════════════════════════════╝")
+        output.append("")
+        output.append(f"📐 Screen Resolution: {width} × {height}")
+        output.append(f"📊 Total Text Elements: {len(lines)}")
+        output.append("")
+        
+        # URLs
+        if urls:
+            output.append("🔗 LINKS DETECTED:")
+            output.append("─" * 60)
+            for i, url in enumerate(set(urls), 1):
+                output.append(f"  {i}. {url}")
+            output.append("")
+        
+        # Files
+        if file_names:
+            output.append("📄 FILES DETECTED:")
+            output.append("─" * 60)
+            for i, file in enumerate(set(file_names), 1):
+                output.append(f"  {i}. {file}")
+            output.append("")
+        
+        # Phone numbers
+        if phone_numbers:
+            output.append("📱 PHONE NUMBERS:")
+            output.append("─" * 60)
+            for i, phone in enumerate(set(phone_numbers), 1):
+                output.append(f"  {i}. {phone}")
+            output.append("")
+        
+        # Emails
+        if emails:
+            output.append("📧 EMAIL ADDRESSES:")
+            output.append("─" * 60)
+            for i, email in enumerate(set(emails), 1):
+                output.append(f"  {i}. {email}")
+            output.append("")
+        
+        # Messages/Chat
+        if messages:
+            output.append("💬 MESSAGES/CHAT:")
+            output.append("─" * 60)
+            for msg in messages[:10]:  # Limit to 10 messages
+                output.append(f"  • {msg}")
+            if len(messages) > 10:
+                output.append(f"  ... and {len(messages) - 10} more messages")
+            output.append("")
+        
+        # Other important text
+        if other_text:
+            output.append("📝 OTHER TEXT:")
+            output.append("─" * 60)
+            for text in other_text[:15]:  # Limit to 15 items
+                if len(text) > 60:
+                    output.append(f"  • {text[:57]}...")
+                else:
+                    output.append(f"  • {text}")
+            if len(other_text) > 15:
+                output.append(f"  ... and {len(other_text) - 15} more items")
+            output.append("")
+        
+        output.append("─" * 60)
+        output.append("✨ Analysis complete! Use the copy button to save this report.")
+        
+        return "\n".join(output)
     
     @staticmethod
     def _analyze_image(ai_engine: AIEngine, image_path: str) -> str:
@@ -341,8 +581,11 @@ class CommandExecutor:
         if not ai_engine:
             return "❌ AI engine required for automation"
         
-        automation_engine = CommandExecutor._get_automation_engine(ai_engine)
-        return automation_engine.automate(instruction)
+        try:
+            automation_engine = CommandExecutor._get_automation_engine(ai_engine)
+            return automation_engine.automate(instruction)
+        except ImportError as e:
+            raise ImportError(f"Automation not available. Missing: {str(e)}")
 
     @staticmethod
     def _preview_automation(instruction: str, ai_engine: AIEngine) -> str:
@@ -368,7 +611,10 @@ class CommandExecutor:
     def _screen_aware_click(target: str, ai_engine: AIEngine) -> str:
         if not ai_engine:
             return "❌ AI engine required for automation"
-        return CommandExecutor._get_automation_engine(ai_engine).screen_aware_click(target)
+        try:
+            return CommandExecutor._get_automation_engine(ai_engine).screen_aware_click(target)
+        except ImportError as e:
+            raise ImportError(f"Screen automation not available. Missing: {str(e)}")
     
     @staticmethod
     def _get_screenshot_path() -> str:

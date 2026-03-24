@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-BenX - Advanced AI Assistant with RAG and Image Sensing
+BenX - Advanced AI Assistant with Beautiful GTK4 UI
 Main entry point
 """
 import sys
@@ -8,6 +8,11 @@ import signal
 import logging
 from datetime import datetime
 from pathlib import Path
+
+# CRITICAL: Load GTK4 BEFORE anything else
+import gi
+gi.require_version('Gtk', '4.0')
+gi.require_version('Adw', '1')
 
 # Setup logging
 from jarvis_ai.config import Config
@@ -22,12 +27,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Check GUI availability
+# Check GTK4 availability
 try:
-    from jarvis_ai.gui.jarvis_ui import JarvisUI, GUI_AVAILABLE
-except ImportError:
+    from jarvis_ai.gui import beautiful_gtk4
+    GUI_AVAILABLE = True
+except ImportError as e:
     GUI_AVAILABLE = False
-    logger.warning("GUI not available")
+    logger.warning(f"Beautiful GTK4 GUI not available: {e}")
 
 
 class BenX:
@@ -65,14 +71,14 @@ class BenX:
     def run(self):
         """Main application loop"""
         if self.use_gui:
-            print("🎯 Starting BenX with JARVIS UI...")
+            print("🎯 Starting BenX with Beautiful GTK4 UI...")
             try:
-                from jarvis_ai.gui.jarvis_ui import JarvisUI
-                self.gui = JarvisUI(self)
-                self.gui.run()
+                from jarvis_ai.gui import beautiful_gtk4
+                app = beautiful_gtk4.create_beautiful_gtk4_ui(self)
+                app.run_app()
             except Exception as e:
-                logger.error(f"GUI startup failed: {e}")
-                print(f"⚠️  GUI failed to start: {e}")
+                logger.error(f"Beautiful GTK4 UI failed: {e}")
+                print(f"❌ GTK4 failed to start: {e}")
                 print("Falling back to CLI mode...")
                 self.run_cli()
         else:

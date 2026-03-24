@@ -15,8 +15,15 @@ try:
     import tkinter as tk
     from tkinter import Canvas
     GUI_AVAILABLE = True
+    try:
+        import pystray
+        from PIL import Image, ImageDraw
+        TRAY_AVAILABLE = True
+    except ImportError:
+        TRAY_AVAILABLE = False
 except ImportError:
     GUI_AVAILABLE = False
+    TRAY_AVAILABLE = False
 
 
 class BenXUI:
@@ -34,6 +41,8 @@ class BenXUI:
         self.rotation = 0
         self.cpu = 0
         self.mem = 0
+        self.restore_win = None
+        self.window_mode = 'full'  # full, compact, minimized
         self.setup_gui()
     
     def setup_gui(self):
@@ -53,7 +62,7 @@ class BenXUI:
         main = tk.Frame(self.root, bg='#000000')
         main.pack(fill='both', expand=True, padx=20, pady=20)
         
-        # Top: BenX Title
+        # Top: BenX Title with minimize button
         title_frame = tk.Frame(main, bg='#000000', height=80)
         title_frame.pack(fill='x', pady=(0, 20))
         title_frame.pack_propagate(False)
@@ -64,7 +73,55 @@ class BenXUI:
             font=('Orbitron', 48, 'bold'),
             fg='#00ff41',
             bg='#000000'
-        ).pack(expand=True)
+        ).pack(side='left', expand=True)
+        
+        tk.Button(
+            title_frame,
+            text="□",
+            command=self.toggle_compact_mode,
+            font=('Courier New', 20, 'bold'),
+            bg='#000000',
+            fg='#00ffff',
+            activebackground='#001a00',
+            activeforeground='#00ffff',
+            relief='flat',
+            bd=0,
+            padx=15,
+            pady=0,
+            cursor='hand2'
+        ).pack(side='right', padx=(5, 5))
+        
+        tk.Button(
+            title_frame,
+            text="─",
+            command=self.minimize_window,
+            font=('Courier New', 20, 'bold'),
+            bg='#000000',
+            fg='#00ff41',
+            activebackground='#001a00',
+            activeforeground='#00ff41',
+            relief='flat',
+            bd=0,
+            padx=15,
+            pady=0,
+            cursor='hand2'
+        ).pack(side='right', padx=(5, 10))
+        
+        tk.Button(
+            title_frame,
+            text="×",
+            command=self.on_closing,
+            font=('Courier New', 20, 'bold'),
+            bg='#000000',
+            fg='#ff0066',
+            activebackground='#001a00',
+            activeforeground='#ff0066',
+            relief='flat',
+            bd=0,
+            padx=15,
+            pady=0,
+            cursor='hand2'
+        ).pack(side='right', padx=5)
         
         # Content: 3 panels
         content = tk.Frame(main, bg='#000000')
@@ -186,16 +243,16 @@ class BenXUI:
                 logo_path = Path(__file__).parent.parent.parent / "benx.jpg"
                 if logo_path.exists():
                     img = Image.open(logo_path)
-                    # Resize to fit
                     img.thumbnail((300, 300))
                     self.logo_image = ImageTk.PhotoImage(img)
                 else:
                     self.logo_image = None
             
-            if self.logo_image:
+            if hasattr(self, 'logo_image') and self.logo_image:
                 self.logo_canvas.create_image(cx, cy, image=self.logo_image)
-        except:
-            # Fallback to text if image fails
+            else:
+                self.logo_canvas.create_text(cx, cy, text="BenX", fill='#00ff41', font=('Orbitron', 32, 'bold'))
+        except Exception as e:
             self.logo_canvas.create_text(cx, cy, text="BenX", fill='#00ff41', font=('Orbitron', 32, 'bold'))
         
         # Decorative circles around logo (inner ring removed)
@@ -373,6 +430,8 @@ class BenXUI:
                         self.root.after(0, self.log_activity, f"GitHub search")
                     elif action == "open_whatsapp_contact":
                         self.root.after(0, self.log_activity, f"WhatsApp opened")
+                    elif action == "send_whatsapp_message":
+                        self.root.after(0, self.log_activity, f"WhatsApp message requested")
                 except:
                     pass
                     
@@ -385,6 +444,9 @@ class BenXUI:
     
     def _show_response(self, response: str):
         self.add_message("BenX", response)
+        # Also add to compact chat if it exists
+        if hasattr(self, 'compact_chat_inner') and self.compact_chat_inner:
+            self.add_compact_message("BenX", response)
         if hasattr(self.voice_handler, 'tts_engine') and len(response) < 500:
             self.voice_handler.speak(response)
     
@@ -400,6 +462,262 @@ class BenXUI:
                 self.root.after(0, self.log_activity, "❌ Voice input failed")
         
         threading.Thread(target=_listen, daemon=True).start()
+    
+    def toggle_compact_mode(self):
+        """Toggle between full and compact mode"""
+        if self.window_mode == 'full':
+            self.enter_compact_mode()
+        else:
+            self.enter_full_mode()
+    
+    def enter_compact_mode(self):
+        """Enter compact mode - chat only"""
+        self.window_mode = 'compact'
+        
+        # Hide main window
+        self.root.withdraw()
+        
+        # Create compact window
+        if hasattr(self, 'compact_win') and self.compact_win:
+            try:
+                self.compact_win.destroy()
+            except:
+                pass
+        
+        self.compact_win = tk.Toplevel(self.root)
+        self.compact_win.title("BenX Chat")
+        self.compact_win.configure(bg='#000000')
+        self.compact_win.overrideredirect(True)
+        self.compact_win.attributes('-topmost', True)
+        
+        width, height = 400, 500
+        
+        # Main frame
+        main = tk.Frame(self.compact_win, bg='#001a00', bd=2, relief='solid')
+        main.pack(fill='both', expand=True)
+        
+        # Title bar
+        title_bar = tk.Frame(main, bg='#000000', height=40)
+        title_bar.pack(fill='x')
+        title_bar.pack_propagate(False)
+        
+        tk.Label(title_bar, text="BenX Chat", font=('Courier New', 12, 'bold'), fg='#00ff41', bg='#000000').pack(side='left', padx=10)
+        
+        # Expand button
+        tk.Button(title_bar, text="▢", command=self.enter_full_mode, font=('Courier New', 14, 'bold'), bg='#000000', fg='#00ffff', activebackground='#001a00', activeforeground='#00ffff', relief='flat', bd=0, padx=10, cursor='hand2').pack(side='right', padx=5)
+        
+        # Minimize button
+        tk.Button(title_bar, text="─", command=self.minimize_window, font=('Courier New', 14, 'bold'), bg='#000000', fg='#00ff41', activebackground='#001a00', activeforeground='#00ff41', relief='flat', bd=0, padx=10, cursor='hand2').pack(side='right', padx=5)
+        
+        # Chat area
+        chat_frame = tk.Frame(main, bg='#000a00', bd=1, relief='solid')
+        chat_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        self.compact_chat_canvas = Canvas(chat_frame, bg='#000a00', highlightthickness=0)
+        self.compact_chat_canvas.pack(side='left', fill='both', expand=True)
+        
+        scrollbar = tk.Scrollbar(chat_frame, command=self.compact_chat_canvas.yview, bg='#001a00')
+        scrollbar.pack(side='right', fill='y')
+        self.compact_chat_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        self.compact_chat_inner = tk.Frame(self.compact_chat_canvas, bg='#000a00')
+        self.compact_chat_canvas.create_window((0, 0), window=self.compact_chat_inner, anchor='nw')
+        self.compact_chat_inner.bind('<Configure>', lambda e: self.compact_chat_canvas.configure(scrollregion=self.compact_chat_canvas.bbox('all')))
+        
+        # Copy existing messages
+        for widget in self.chat_inner.winfo_children():
+            # Clone message to compact view
+            pass
+        
+        # Input area
+        input_frame = tk.Frame(main, bg='#001a00', bd=2, relief='solid')
+        input_frame.pack(fill='x', padx=10, pady=(0, 10))
+        
+        self.compact_input = tk.Entry(input_frame, font=('Courier New', 11), bg='#000a00', fg='#00ff41', insertbackground='#00ff41', relief='flat', bd=8)
+        self.compact_input.pack(fill='x')
+        self.compact_input.bind('<Return>', lambda e: self.process_compact_input())
+        self.compact_input.focus()
+        
+        # Buttons
+        btn_frame = tk.Frame(main, bg='#001a00')
+        btn_frame.pack(fill='x', padx=10, pady=(0, 10))
+        
+        tk.Button(btn_frame, text="SEND", command=self.process_compact_input, font=('Courier New', 10, 'bold'), bg='#000000', fg='#00ff41', activebackground='#001a00', activeforeground='#00ff41', relief='solid', bd=2, padx=15, pady=6).pack(side='left', padx=5)
+        
+        tk.Button(btn_frame, text="VOICE", command=self.voice_input, font=('Courier New', 10, 'bold'), bg='#000000', fg='#00ffff', activebackground='#001a00', activeforeground='#00ffff', relief='solid', bd=2, padx=15, pady=6).pack(side='left', padx=5)
+        
+        # Make draggable
+        def on_drag(e):
+            self.compact_win.geometry(f'+{e.x_root-width//2}+{e.y_root-20}')
+        title_bar.bind('<B1-Motion>', on_drag)
+        
+        # Position
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        x = screen_w - width - 40
+        y = screen_h - height - 80
+        self.compact_win.geometry(f'{width}x{height}+{x}+{y}')
+        
+        self.log_activity("Entered compact mode")
+    
+    def enter_full_mode(self):
+        """Return to full mode"""
+        self.window_mode = 'full'
+        
+        # Close compact window
+        if hasattr(self, 'compact_win') and self.compact_win:
+            try:
+                self.compact_win.destroy()
+            except:
+                pass
+        
+        # Show main window
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+        self.log_activity("Entered full mode")
+    
+    def process_compact_input(self):
+        """Process input from compact mode"""
+        if self.processing:
+            return
+        
+        user_input = self.compact_input.get().strip()
+        if not user_input:
+            return
+        
+        self.compact_input.delete(0, tk.END)
+        
+        # Add to both chat views
+        self.add_message("You", user_input)
+        self.add_compact_message("You", user_input)
+        
+        self.processing = True
+        threading.Thread(target=self._process_thread, args=(user_input,), daemon=True).start()
+    
+    def add_compact_message(self, sender: str, message: str):
+        """Add message to compact chat"""
+        if not hasattr(self, 'compact_chat_inner'):
+            return
+        
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        
+        msg_frame = tk.Frame(self.compact_chat_inner, bg='#000a00')
+        msg_frame.pack(fill='x', pady=5, padx=10)
+        
+        color = '#00ff41' if sender == 'BenX' else '#00ffff'
+        
+        tk.Label(msg_frame, text=f"[{timestamp}] {sender}:", font=('Courier New', 9, 'bold'), fg=color, bg='#000a00', anchor='w').pack(anchor='w')
+        tk.Label(msg_frame, text=f"  {message}", font=('Courier New', 9), fg='#cccccc', bg='#000a00', wraplength=350, justify='left', anchor='w').pack(anchor='w', padx=10)
+        
+        self.compact_chat_canvas.update_idletasks()
+        self.compact_chat_canvas.yview_moveto(1.0)
+    
+    def minimize_window(self):
+        """Minimize to notification bar"""
+        if self.window_mode == 'compact':
+            # Close compact window
+            if hasattr(self, 'compact_win') and self.compact_win:
+                try:
+                    self.compact_win.destroy()
+                except:
+                    pass
+            self.previous_mode = 'compact'
+        else:
+            # Hide main window
+            self.root.withdraw()
+            self.previous_mode = 'full'
+        
+        self.window_mode = 'minimized'
+        self.log_activity("Creating restore button...")
+        self.create_restore_button()
+        self.log_activity("Minimized (click notification)")
+    
+    def create_restore_button(self):
+        """Create floating restore button - macOS notification style"""
+        if hasattr(self, 'restore_win') and self.restore_win:
+            try:
+                self.restore_win.destroy()
+            except:
+                pass
+        
+        from PIL import Image, ImageDraw, ImageTk
+        from pathlib import Path
+        
+        self.restore_win = tk.Toplevel(self.root)
+        self.restore_win.title("BenX")
+        self.restore_win.overrideredirect(True)
+        self.restore_win.attributes('-topmost', True)
+        
+        # Very compact notification bar
+        width = 150
+        height = 40
+        
+        # Create frame without border
+        frame = tk.Frame(self.restore_win, bg='#1a1a1a', bd=0, highlightthickness=0)
+        frame.pack(fill='both', expand=True)
+        
+        # Content frame
+        content = tk.Frame(frame, bg='#1a1a1a')
+        content.pack(fill='both', expand=True, padx=6, pady=6)
+        
+        # Left side - Logo
+        logo_path = Path(__file__).parent.parent.parent / "benx.jpg"
+        if logo_path.exists():
+            img = Image.open(logo_path).convert('RGBA')
+            img = img.resize((28, 28), Image.Resampling.LANCZOS)
+            self.restore_photo = ImageTk.PhotoImage(img)
+            logo_label = tk.Label(content, image=self.restore_photo, bg='#1a1a1a', bd=0)
+        else:
+            logo_label = tk.Label(content, text='B', font=('Orbitron', 14, 'bold'), fg='#00ff41', bg='#1a1a1a', bd=0)
+        logo_label.pack(side='left', padx=(0, 6))
+        
+        # Right side - Text
+        text_label = tk.Label(content, text='BenX', font=('Arial', 11, 'bold'), fg='#ffffff', bg='#1a1a1a', anchor='w', bd=0)
+        text_label.pack(side='left', fill='both', expand=True)
+        
+        # Bind click to entire window
+        def on_click(e):
+            self.restore_window()
+        
+        for widget in [self.restore_win, frame, content, logo_label, text_label]:
+            widget.bind('<Button-1>', on_click)
+        
+        # Make draggable
+        def on_drag(e):
+            self.restore_win.geometry(f'+{e.x_root-width//2}+{e.y_root-20}')
+        
+        frame.bind('<B1-Motion>', on_drag)
+        
+        # Position at top right
+        def set_position():
+            screen_w = self.root.winfo_screenwidth()
+            x = screen_w - width - 20
+            y = 60
+            self.restore_win.geometry(f'{width}x{height}+{x}+{y}')
+            self.restore_win.lift()
+            logger.info(f"Restore notification positioned at top right: {x},{y}")
+        
+        self.restore_win.after(100, set_position)
+    
+    def restore_window(self):
+        """Restore window from minimized state"""
+        if hasattr(self, 'restore_win') and self.restore_win:
+            self.restore_win.destroy()
+            self.restore_win = None
+        
+        # Restore to previous mode
+        previous = getattr(self, 'previous_mode', 'full')
+        
+        if previous == 'compact':
+            self.enter_compact_mode()
+        else:
+            self.window_mode = 'full'
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+        
+        self.log_activity(f"Restored to {previous} mode")
     
     def on_closing(self):
         self.root.destroy()

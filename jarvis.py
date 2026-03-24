@@ -9,6 +9,7 @@ import sys
 import json
 import logging
 import shlex
+import shutil
 import subprocess
 import time
 import psutil
@@ -72,6 +73,8 @@ except ImportError:
     OCR_AVAILABLE = False
 
 # Automation imports (optional)
+WTYPE_AVAILABLE = shutil.which("wtype") is not None
+
 try:
     import pyautogui
     AUTOMATION_AVAILABLE = True
@@ -80,11 +83,13 @@ try:
 except ImportError:
     AUTOMATION_AVAILABLE = False
 
+WHATSAPP_AUTOMATION_AVAILABLE = AUTOMATION_AVAILABLE or WTYPE_AVAILABLE
+
 # ==================== CONFIGURATION ====================
 
 class Config:
     # API Configuration
-    GROQ_KEY = ""
+    GROQ_KEY = os.getenv("GROQ_KEY", "").strip()
     
     # Models with priority order (using best models for understanding)
     MODELS = [
@@ -514,6 +519,18 @@ Remember: You're not just executing commands - you're understanding the user's n
     def _fallback_command_match(text: str, context: str = "") -> str:
         """Fallback command matching when AI fails"""
         text_lower = text.lower()
+
+        whatsapp_match = re.search(
+            r"(?:send|message)\s+(?:a\s+)?whatsapp(?:\s+message)?\s+(?:to\s+)?(?P<contact>.+?)\s+(?:saying|with|that says)\s+(?P<message>.+)",
+            text,
+            re.IGNORECASE,
+        )
+        if whatsapp_match:
+            return json.dumps({
+                "command": "send_whatsapp_message",
+                "contact": whatsapp_match.group("contact").strip(),
+                "message": whatsapp_match.group("message").strip(),
+            })
         
         # Direct command patterns
         if "create" in text_lower and "pdf" in text_lower:
@@ -579,7 +596,7 @@ THINKING PROCESS:
 
 OUTPUT FORMAT:
 Output ONLY valid JSON in this exact format:
-{"command": "action_name", "app": "app_name", "value": number, "path": "file_path", "query": "search_term", "text": "content", "process": "process_name", "dest": "destination_path", "package": "package_name", "city": "city_name", "url": "url", "ssid": "wifi_name"}
+{"command": "action_name", "app": "app_name", "value": number, "path": "file_path", "query": "search_term", "text": "content", "message": "message_text", "process": "process_name", "dest": "destination_path", "package": "package_name", "city": "city_name", "url": "url", "ssid": "wifi_name", "contact": "contact_name_or_number"}
 
 SUPPORTED COMMANDS (with intelligent synonyms):
 APPLICATIONS:
@@ -647,6 +664,7 @@ UTILITIES:
 - analyze_screen: "analyze screen", "what's on screen", "screen analysis"
 - read_screen_text: "read screen", "extract text", "OCR screen"
 - automate: "automate", "do this", "perform automation", "execute automation"
+- send_whatsapp_message: "send whatsapp message", "message CONTACT on whatsapp", "send CONTACT MESSAGE on whatsapp"
 
 PACKAGES:
 - install_package: "install", "add package" (system packages)
@@ -696,6 +714,7 @@ CONTEXT AWARENESS:
   * "❌ OCR not available. Install: pip install pytesseract Pillow" → extract "pytesseract Pillow"
 - Understand "install" can mean Python packages if context suggests it (error messages, "pip", "python package", etc.)
 - When user says "install" after an error mentioning packages, use install_python_package command
+- For WhatsApp send requests, use "send_whatsapp_message" and put the recipient in "contact" and the body in "message"
 
 COMMAND VS QUESTION:
 - COMMANDS (execute actions): "create", "open", "install", "delete", "move", "copy", "automate", "set", "increase", "decrease", "kill", "play", "pause"
@@ -765,38 +784,9 @@ IMPORTANT:
                 enhanced_prompt = f"{text} (file to open: {file_path})"
         
         try:
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-            try:
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
             return AIEngine.query_groq(system_prompt, enhanced_prompt, conversation_context=context_messages)
         except Exception as e:
             logger.error(f"Command interpretation failed: {e}")
-            # Fallback: Try direct command matching
-            return AIEngine._fallback_command_match(text, recent_context)
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-        except Exception as e:
-            logger.error(f"Command interpretation failed: {e}")
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
             # Fallback: Try direct command matching
             return AIEngine._fallback_command_match(text, recent_context)
 
@@ -1397,6 +1387,93 @@ class CommandEngine:
             url = 'https://' + url
         success, _ = run_cmd(f"xdg-open {shlex.quote(url)}")
         return f"✅ Opened {url}" if success else f"❌ Failed to open {url}"
+
+    @staticmethod
+    def _normalize_phone_number(contact: str) -> str:
+        if not contact:
+            return ""
+
+        trimmed = contact.strip()
+        prefix = "+" if trimmed.startswith("+") else ""
+        digits = re.sub(r"\D", "", trimmed)
+        if len(digits) < 8:
+            return ""
+        return f"{prefix}{digits}" if prefix else digits
+
+    @staticmethod
+    def _press_enter_after_delay(
+        delay_seconds: float = 12.0,
+        attempts: int = 3,
+        retry_delay_seconds: float = 2.0,
+    ) -> None:
+        if not WHATSAPP_AUTOMATION_AVAILABLE:
+            return
+
+        def _press_key(key: str) -> bool:
+            try:
+                if AUTOMATION_AVAILABLE:
+                    pyautogui.press(key.lower())
+                    return True
+                if WTYPE_AVAILABLE:
+                    key_name = "Return" if key.lower() == "enter" else key.capitalize()
+                    success, _ = run_cmd(f"wtype -k {shlex.quote(key_name)}")
+                    return success
+            except Exception as exc:
+                logger.warning(f"WhatsApp key press failed for {key}: {exc}")
+            return False
+
+        def _send():
+            try:
+                time.sleep(delay_seconds)
+
+                for attempt in range(attempts):
+                    _press_key("enter")
+                    if attempt < attempts - 1:
+                        time.sleep(retry_delay_seconds)
+                        _press_key("tab")
+                        time.sleep(0.3)
+            except Exception as exc:
+                logger.warning(f"WhatsApp auto-send failed: {exc}")
+
+        threading.Thread(target=_send, daemon=True).start()
+
+    @staticmethod
+    def send_whatsapp_message(contact: str, message: str) -> str:
+        if not contact:
+            return "❌ No WhatsApp contact or phone number specified"
+        if not message:
+            return "❌ No WhatsApp message specified"
+
+        import urllib.parse
+
+        normalized_phone = CommandEngine._normalize_phone_number(contact)
+        encoded_message = urllib.parse.quote(message)
+
+        if not normalized_phone:
+            success, _ = run_cmd(f"xdg-open {shlex.quote('https://web.whatsapp.com')}")
+            if not success:
+                return "❌ Failed to open WhatsApp"
+            return (
+                f"⚠️ Opened WhatsApp Web, but immediate send needs a phone number. "
+                f"Search for '{contact}', paste the message, and press Enter."
+            )
+
+        url = (
+            "https://web.whatsapp.com/send"
+            f"?phone={urllib.parse.quote(normalized_phone)}&text={encoded_message}"
+        )
+        success, _ = run_cmd(f"xdg-open {shlex.quote(url)}")
+        if not success:
+            return "❌ Failed to open WhatsApp"
+
+        if WHATSAPP_AUTOMATION_AVAILABLE:
+            CommandEngine._press_enter_after_delay()
+            return f"✅ Sending WhatsApp message to {contact} now"
+
+        return (
+            f"✅ Opened WhatsApp chat for {contact} with the message filled in. "
+            "Press Enter once the page loads to send it."
+        )
     
     @staticmethod
     def open_file(path: str) -> str:
@@ -1933,6 +2010,10 @@ class CommandExecutor:
                 "analyze_screen": lambda: CommandEngine.analyze_screen(),
                 "read_screen_text": lambda: CommandEngine.read_screen_text(),
                 "automate": lambda: CommandExecutor._execute_automation(obj.get("instruction", user_input), ai_engine),
+                "send_whatsapp_message": lambda: CommandEngine.send_whatsapp_message(
+                    obj.get("contact", ""),
+                    obj.get("message", obj.get("text", "")),
+                ),
                 
                 # Packages
                 "install_package": lambda: CommandEngine.install_package(obj.get("package", "")),

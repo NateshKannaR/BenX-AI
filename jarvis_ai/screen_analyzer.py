@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 try:
     from PIL import Image
     import pytesseract
+    import os
+    # Set TESSDATA_PREFIX if not already set
+    if 'TESSDATA_PREFIX' not in os.environ:
+        os.environ['TESSDATA_PREFIX'] = '/usr/share/tessdata/'
     OCR_AVAILABLE = True
 except ImportError:
     OCR_AVAILABLE = False
@@ -104,6 +108,8 @@ Analyze this screen and describe what is displayed."""
         except Exception as e:
             logger.error(f"Text search error: {e}")
             return None
+
+
 
 
 

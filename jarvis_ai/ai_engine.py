@@ -192,14 +192,24 @@ class RAGEngine:
 
 
 class AIEngine:
-    """AI Engine with RAG and vision capabilities"""
+    """AI Engine with RAG, vision, memory and agentic orchestration"""
     
     def __init__(self):
         self.conversation_history = []
         self.rag_engine = RAGEngine()
         self.load_conversation_history()
         from jarvis_ai.learning import LearningEngine
+        from jarvis_ai.memory_engine import MemoryEngine
         self.learning_engine = LearningEngine(self)
+        self.memory_engine = MemoryEngine(Config.BENX_DIR / "memory.json")
+        self._agent = None
+
+    def _get_agent(self):
+        if self._agent is None:
+            from jarvis_ai.agent_orchestrator import AgentOrchestrator
+            from jarvis_ai.executor import CommandExecutor
+            self._agent = AgentOrchestrator(self, CommandExecutor)
+        return self._agent
     
     def load_conversation_history(self):
         """Load conversation history from file"""
@@ -207,16 +217,21 @@ class AIEngine:
             if Config.CONVERSATION_FILE.exists():
                 with open(Config.CONVERSATION_FILE, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    self.conversation_history = data.get("messages", [])[-20:]
+                    self.session_id = data.get("session_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
+                    self.conversation_history = data.get("messages", [])[-60:]
         except Exception as e:
             logger.warning(f"Failed to load conversation history: {e}")
             self.conversation_history = []
+            self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     def save_conversation_history(self):
         """Save conversation history to file"""
         try:
             with open(Config.CONVERSATION_FILE, 'w', encoding='utf-8') as f:
-                json.dump({"messages": self.conversation_history[-50:]}, f, indent=2)
+                json.dump({
+                    "session_id": self.session_id,
+                    "messages": self.conversation_history[-100:]
+                }, f, indent=2)
         except Exception as e:
             logger.warning(f"Failed to save conversation history: {e}")
     
@@ -234,34 +249,54 @@ class AIEngine:
             return None
     
     @staticmethod
-    def query_groq(system_prompt: str, user_prompt: str, 
+    def _detect_task_type(user_prompt: str, use_vision: bool) -> str:
+        """Detect task type for model routing"""
+        if use_vision:
+            return "vision"
+        p = user_prompt.lower()
+        code_kw = ["code", "function", "class", "debug", "python", "javascript", "typescript",
+                   "sql", "bash", "script", "implement", "refactor", "bug", "error", "compile"]
+        reason_kw = ["analyze", "explain", "compare", "research", "summarize", "plan", "strategy"]
+        fast_kw = ["volume", "brightness", "open", "close", "play", "pause", "mute", "lock"]
+        if any(k in p for k in code_kw):
+            return "code"
+        if any(k in p for k in reason_kw):
+            return "reason"
+        if any(k in p for k in fast_kw):
+            return "fast"
+        return "chat"
+
+    @staticmethod
+    def query_groq(system_prompt: str, user_prompt: str,
                    model_preference: Optional[str] = None,
                    conversation_context: List[Dict] = None,
                    image_path: Optional[str] = None,
-                   use_vision: bool = False) -> str:
-        """Query Groq API with fallback support, conversation context, and image support"""
+                   use_vision: bool = False,
+                   task_type: Optional[str] = None) -> str:
+        """Query Groq API with smart model routing, fallback, and image support"""
         if not Config.GROQ_KEY:
             return "❌ Missing GROQ_API_KEY. Set it in your environment before running."
         headers = {
             "Authorization": f"Bearer {Config.GROQ_KEY}",
             "Content-Type": "application/json"
         }
-        
-        # Select models based on whether we need vision
-        if use_vision and image_path:
-            models = [m for m in Config.IMAGE_MODELS if m in Config.MODELS] + Config.MODELS
-        else:
-            models = Config.MODELS.copy()
-        
+
+        # Smart model routing
+        if task_type is None:
+            task_type = AIEngine._detect_task_type(user_prompt, use_vision)
+        route = Config.MODEL_ROUTES.get(task_type, Config.MODEL_ROUTES["chat"])
+        # Merge route + full list as fallback, deduplicated
+        models = list(dict.fromkeys(route + Config.MODELS))
+
         if model_preference and model_preference in models:
             models.remove(model_preference)
             models.insert(0, model_preference)
-        
-        # Build messages
+
+        logger.info(f"🧠 Task type: {task_type} → primary model: {models[0]}")
+
         messages = [{"role": "system", "content": system_prompt}]
-        
         if conversation_context:
-            messages.extend(conversation_context[-10:])
+            messages.extend(conversation_context[-30:])
         
         # Add image if provided and vision is enabled
         user_message_content = user_prompt
@@ -352,86 +387,102 @@ class AIEngine:
         error_msg += "\n\nCheck your connection and API key."
         return error_msg
     
+    def agent_run(self, user_goal: str, confirm_cb=None, on_step_cb=None) -> Optional[str]:
+        """Run agentic loop. Returns None if goal is simple."""
+        agent = self._get_agent()
+        agent.on_step_cb = on_step_cb
+        result = agent.run(user_goal, confirm_cb=confirm_cb)
+        if result:
+            self.conversation_history.append({"role": "user", "content": user_goal})
+            self.conversation_history.append({"role": "assistant", "content": result})
+            self.save_conversation_history()
+            self.memory_engine.remember(user_goal, result, category="agent")
+            if Config.RAG_ENABLED:
+                self.rag_engine.add_document(
+                    f"Agent task: {user_goal}\nResult: {result[:300]}",
+                    metadata={"type": "agent", "timestamp": datetime.now().isoformat()}
+                )
+        return result
+
     def chat(self, user_input: str, system_context: str = None, image_path: Optional[str] = None) -> str:
-        """Chat with AI using advanced conversation context, RAG, and optional image"""
-        
-        # Get RAG context
+        """Chat with AI using full context: RAG + memory + workspace + vision"""
+
+        # RAG context
         rag_context = ""
         if Config.RAG_ENABLED:
             relevant_docs = self.rag_engine.search(user_input, k=3)
             if relevant_docs:
-                rag_context = "\n\nRelevant context from memory:\n"
-                for doc in relevant_docs:
-                    rag_context += f"- {doc['text'][:200]}\n"
-        
-        # Get system state
-        system_state = self._get_system_context()
-        
-        system_prompt = f"""You are BenX, an ultra-advanced AI personal assistant with complete control over the user's Linux system.
+                rag_context = "\nRelevant memory:\n" + "".join(
+                    f"- {d['text'][:200]}\n" for d in relevant_docs
+                )
 
-PERSONALITY & COMMUNICATION:
-- Be extremely intelligent, helpful, and understanding
-- Understand context deeply - remember previous conversations and adapt
-- Be conversational, natural, and friendly but professional
-- Show personality - be witty when appropriate, empathetic when needed
-- Think step-by-step before responding to complex queries
-- If you're unsure, ask clarifying questions rather than guessing
+        system_state = self._get_system_context()
+
+        # User facts from memory
+        user_facts = self.memory_engine.get_user_facts_summary()
+
+        # Build a rich, personal system prompt
+        name = self.memory_engine.get_fact("user_name")
+        greeting_name = f", {name.capitalize()}" if name else ""
+
+        system_prompt = f"""You are BenX, an ultra-advanced AI personal assistant with complete control over the user's Linux system.
+Session: {self.session_id}
+
+PERSONALITY:
+- Intelligent, direct, and genuinely helpful
+- Remember everything about the user across sessions
+- Be conversational and natural — not robotic
+- Proactive: notice things (low battery, high CPU) and mention them
+- Witty when appropriate, empathetic when needed
+- Never say "I cannot" — find a way or explain what's needed
 
 CAPABILITIES:
-You have complete system control including:
-- Applications (open, manage, monitor)
-- System settings (volume, brightness, power)
-- File operations (create, read, write, search, manage)
-- Process management (monitor, kill, find)
-- Network management (WiFi, connections)
-- Media control (music, videos)
-- System monitoring (CPU, memory, disk, battery)
-- Package management (install, update)
-- Image analysis and understanding (vision capabilities)
-- And much more...
+- Full Linux system control (apps, files, processes, network, audio, display)
+- Workspace awareness (knows every open window and which workspace it's on)
+- Email, browser automation, bluetooth, notifications
+- Code analysis, project creation, git operations
+- Web search and scraping
+- Image analysis and screen reading
+- Multi-step agentic task execution
 
 CURRENT SYSTEM STATE:
 {system_state}
 
+{user_facts}
 {rag_context}
+CONTEXT RULES:
+- You have the FULL conversation history — use it actively
+- Resolve pronouns from prior messages ("it", "that file", "the one I mentioned")
+- Never ask for info already given earlier in conversation
+- If user says "you" or "yourself" about workspace → look for BenX in workspace state
+- Be proactive: if battery < 20% mention it, if CPU > 90% mention it
 
-CONTEXT AWARENESS:
-- Remember what the user has asked before
-- Understand implicit requests (e.g., "make it louder" means increase volume)
-- Recognize follow-up questions and references to previous topics
-- Understand user intent even if phrasing is unclear
-- Be proactive - suggest helpful actions when relevant
+{system_context or ""}"""
 
-{system_context if system_context else ""}
-
-Remember: You're not just executing commands - you're understanding the user's needs and helping them achieve their goals intelligently."""
-        
-        # Add to conversation history
         self.conversation_history.append({"role": "user", "content": user_input})
-        
-        # Use vision if image is provided
+
         use_vision = image_path is not None
-        
-        # Get response
+        task_type = "vision" if use_vision else self._detect_task_type(user_input, False)
+
         response = self.query_groq(
-            system_prompt,
-            user_input,
+            system_prompt, user_input,
             conversation_context=self.conversation_history,
             image_path=image_path,
-            use_vision=use_vision
+            use_vision=use_vision,
+            task_type=task_type
         )
-        
-        # Add response to history
+
         self.conversation_history.append({"role": "assistant", "content": response})
         self.save_conversation_history()
-        
-        # Store in RAG for future reference
+
+        # Store in both RAG and memory engine
         if Config.RAG_ENABLED:
             self.rag_engine.add_document(
                 f"Q: {user_input}\nA: {response}",
                 metadata={"type": "conversation", "timestamp": datetime.now().isoformat()}
             )
-        
+        self.memory_engine.remember(user_input, response)
+
         return response
     
     def analyze_image(self, image_path: str, question: str = "What is in this image?") -> str:
@@ -455,27 +506,33 @@ Be thorough, accurate, and descriptive. Identify:
         )
     
     def _get_system_context(self) -> str:
-        """Get current system state for context"""
+        """Get current system state + full workspace context for AI"""
         try:
             import psutil
             context_parts = []
-            
+
             try:
                 battery = psutil.sensors_battery()
                 if battery:
                     context_parts.append(f"Battery: {battery.percent}% ({'Charging' if battery.power_plugged else 'Discharging'})")
             except:
                 pass
-            
+
             try:
                 cpu = psutil.cpu_percent(interval=0.1)
                 memory = psutil.virtual_memory()
                 context_parts.append(f"CPU: {cpu:.1f}%, Memory: {memory.percent:.1f}%")
             except:
                 pass
-            
+
             context_parts.append(f"Time: {datetime.now().strftime('%H:%M:%S')}")
-            
+
+            try:
+                from jarvis_ai.workspace_monitor import WorkspaceMonitor
+                context_parts.append(WorkspaceMonitor.full_state_summary())
+            except Exception as e:
+                logger.debug(f"Workspace context unavailable: {e}")
+
             return "\n".join(context_parts) if context_parts else "System state: Normal"
         except:
             return "System state: Available"
@@ -599,6 +656,45 @@ PACKAGES:
 - install_python_package: "install python package", "pip install", "install with pip" (Python packages)
 - update_system: "update", "upgrade system"
 - check_updates: "check updates", "available updates"
+
+BLUETOOTH:
+- bluetooth_list_paired: "list bluetooth", "paired devices", "bluetooth devices"
+- bluetooth_list_available: "scan bluetooth", "find bluetooth devices", "available bluetooth"
+- bluetooth_connect: "connect bluetooth", "connect to X" → device=name/mac
+- bluetooth_disconnect: "disconnect bluetooth", "disconnect X" → device=name/mac
+- bluetooth_pair: "pair X", "pair bluetooth" → device=mac
+- bluetooth_status: "bluetooth status", "is bluetooth on"
+- bluetooth_on: "turn on bluetooth", "enable bluetooth"
+- bluetooth_off: "turn off bluetooth", "disable bluetooth"
+
+NOTIFICATIONS:
+- send_notification: "notify", "send notification", "alert me", "remind me" → title=, body=, urgency=low|normal|critical
+
+EMAIL:
+- email_inbox: "check email", "read inbox", "show emails", "any new emails" → value=count
+- email_read: "read email", "open email", "show email body" → value=index(1=latest)
+- email_send: "send email", "email X about Y" → to=, subject=, body=
+- email_search: "search email", "find email about X" → query=
+
+BROWSER AUTOMATION:
+- browser_open: "open browser", "browse to X", "open X in browser" → url=
+- browser_scrape: "scrape X", "get content from X", "extract text from X" → url=, query=css_selector
+- browser_screenshot: "screenshot of X website", "capture X page" → url=
+- browser_search: "search web for X", "google X", "look up X online" → query=
+
+WORKSPACE / WINDOW MANAGEMENT (Hyprland):
+- list_workspaces: "list workspaces", "show workspaces", "what's on each workspace", "workspace overview", "what's open", "show all windows"
+- switch_workspace: "go to workspace X", "switch to workspace X", "workspace X" → value=X
+- move_to_workspace: "move window to workspace X", "send to workspace X" → value=X
+- focus_window: "focus chrome", "switch to vscode", "go to terminal", "bring up X" → app=name
+- find_app_workspace: "where is chrome", "which workspace is X on", "find X" → app=name (use app="benx" if user says "you", "yourself", "benx", "this app")
+- close_active_window: "close window", "close this", "kill window"
+- toggle_fullscreen: "fullscreen", "toggle fullscreen"
+- toggle_float: "float window", "toggle float"
+
+SELF-AWARENESS RULE:
+- Questions like "which workspace are you on", "where are you running", "in which workspace are you" → {"command":"find_app_workspace","app":"benx"}
+- The CURRENT SYSTEM STATE already contains the full workspace map - use it to answer directly if BenX window is listed there.
 
 PROJECT ORCHESTRATION (NEW - High Priority):
 - create_project: "create project", "build project", "new project", "create a full project", "make a project", "generate project"
