@@ -13,7 +13,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from jarvis_ai.gui.meet_overlay import MeetAnswerOverlay, is_question
-from jarvis_ai.call_handler import BluetoothCallHandler
+from jarvis_ai.call_handler import BluetoothCallHandler, dial, hangup_all, lookup_contact
 
 logger = logging.getLogger(__name__)
 
@@ -1740,6 +1740,89 @@ class BeautifulBenXGTK4(Adw.ApplicationWindow):
         else:
             self.log_activity("❌ Voice: nothing heard")
             self.add_compact_message("BenX", "❌ Couldn't hear anything. Try again.")
+
+    def make_call(self, name_or_number: str):
+        """
+        Public method — called from AI command engine.
+        Looks up contact, shows confirm popup, then dials.
+        """
+        GLib.idle_add(self._show_outgoing_call_popup, name_or_number)
+
+    def _show_outgoing_call_popup(self, name_or_number: str):
+        display_name, number = lookup_contact(name_or_number)
+        parent = self.compact_win if (hasattr(self, 'compact_win') and self.compact_win) else self
+
+        dialog = Adw.MessageDialog.new(parent)
+        dialog.set_heading("📞 Make a Call")
+        dialog.set_body(
+            f"Call  {display_name}\n"
+            f"Number: {number if number != display_name else '(enter below)'}"
+        )
+
+        entry = Gtk.Entry()
+        entry.set_placeholder_text("Phone number (if not found in contacts)")
+        entry.set_margin_start(12)
+        entry.set_margin_end(12)
+        entry.set_margin_bottom(8)
+        if number != name_or_number:
+            entry.set_text(number)
+        dialog.set_extra_child(entry)
+
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("call",   "Call Now")
+        dialog.set_response_appearance("call",   Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_response_appearance("cancel", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("call")
+        dialog.set_close_response("cancel")
+
+        def on_response(dlg, response_id):
+            if response_id != "call":
+                return
+            final_number = entry.get_text().strip() or number
+            if not final_number or final_number == name_or_number:
+                self.add_compact_message("BenX", "❌ No number found. Please enter a phone number.")
+                return
+            threading.Thread(
+                target=self._do_dial,
+                args=(display_name, final_number),
+                daemon=True
+            ).start()
+
+        dialog.connect("response", on_response)
+        dialog.present()
+        return False
+
+    def _do_dial(self, display_name: str, number: str):
+        self.log_activity(f"📞 Dialing {display_name} ({number})")
+        GLib.idle_add(self.add_compact_message, "BenX",
+                      f"📞 Calling {display_name} ({number})…")
+        success, result = dial(number)
+        if success:
+            GLib.idle_add(self._show_active_call_popup, display_name, number, result)
+            GLib.idle_add(self.log_activity, f"📞 Call connected: {display_name}")
+        else:
+            GLib.idle_add(self.add_compact_message, "BenX", f"❌ Call failed: {result}")
+            GLib.idle_add(self.log_activity, f"❌ Call failed: {result}")
+
+    def _show_active_call_popup(self, display_name: str, number: str, call_path: str):
+        parent = self.compact_win if (hasattr(self, 'compact_win') and self.compact_win) else self
+
+        dialog = Adw.MessageDialog.new(parent)
+        dialog.set_heading("📞 Call in Progress")
+        dialog.set_body(f"Connected to {display_name}\n{number}")
+        dialog.add_response("hangup", "Hang Up")
+        dialog.set_response_appearance("hangup", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("hangup")
+        dialog.set_close_response("hangup")
+
+        def on_response(dlg, response_id):
+            threading.Thread(target=hangup_all, daemon=True).start()
+            self.add_compact_message("BenX", f"📵 Call ended with {display_name}")
+            self.log_activity(f"📵 Call ended: {display_name}")
+
+        dialog.connect("response", on_response)
+        dialog.present()
+        return False
 
     def on_call_handler_toggle(self, widget):
         """Toggle Bluetooth call handler on/off."""

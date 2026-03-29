@@ -1,17 +1,20 @@
 """
-Bluetooth Call Handler for BenX.
+Bluetooth Call Handler for BenX — incoming + outgoing calls via ofono HFP.
 
-Flow:
-  1. Monitor ofono dbus for incoming calls on paired phone (HFP)
-  2. Show GTK popup: caller name/number + ask user what BenX should say
-  3. User says "answer" / types a message (e.g. "I'm busy, call later")
-  4. BenX answers the call via ofono, speaks the message via TTS
-  5. Hangs up after speaking
+Setup (one-time):
+    sudo pacman -S ofono espeak
+    sudo systemctl enable --now ofono
+    # On your phone: Bluetooth → PC → enable "Phone calls" (HFP)
 
-Requirements:
-  - ofono running:  sudo systemctl start ofono
-  - Phone paired + connected with HFP profile
-  - pyttsx3 or espeak for TTS
+Outgoing call flow:
+    User: "call mom" / "call 9876543210"
+    BenX looks up contacts → dials via ofono VoiceCallManager.Dial()
+    Shows active call popup with Hangup button
+
+Incoming call flow:
+    Phone rings → BenX shows popup with caller name + message box
+    User picks: Reject / I'm Busy / Answer & Speak (custom message)
+    BenX answers, speaks the message via TTS, hangs up
 """
 import logging
 import subprocess
@@ -21,34 +24,29 @@ from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
-# ── ofono dbus constants ──────────────────────────────────────────────────────
 OFONO_SERVICE   = "org.ofono"
 OFONO_MANAGER   = "org.ofono.Manager"
-OFONO_MODEM     = "org.ofono.Modem"
 OFONO_VCMANAGER = "org.ofono.VoiceCallManager"
 OFONO_VCALL     = "org.ofono.VoiceCall"
+OFONO_PBAP      = "org.ofono.PhonebookAccess"
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _ensure_ofono() -> bool:
-    """Start ofono if not running. Returns True if available."""
     try:
         import dbus
-        bus = dbus.SystemBus()
-        bus.get_object(OFONO_SERVICE, "/")
+        dbus.SystemBus().get_object(OFONO_SERVICE, "/")
         return True
     except Exception:
         pass
-    # Try to start it
     try:
         subprocess.run(["sudo", "systemctl", "start", "ofono"],
                        timeout=8, check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(2)
         import dbus
-        bus = dbus.SystemBus()
-        bus.get_object(OFONO_SERVICE, "/")
-        logger.info("ofono started successfully")
+        dbus.SystemBus().get_object(OFONO_SERVICE, "/")
         return True
     except Exception as e:
         logger.warning("Could not start ofono: %s", e)
@@ -56,7 +54,6 @@ def _ensure_ofono() -> bool:
 
 
 def _get_modems():
-    """Return list of (path, properties) for all ofono modems."""
     try:
         import dbus
         bus = dbus.SystemBus()
@@ -67,15 +64,18 @@ def _get_modems():
         return []
 
 
+def _first_modem_path() -> Optional[str]:
+    modems = _get_modems()
+    return str(modems[0][0]) if modems else None
+
+
 def _speak(text: str):
-    """Speak text via espeak (fast, no deps) or pyttsx3 fallback."""
     try:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             ["espeak", "-s", "140", "-v", "en", text],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-        # Wait roughly for speech to finish (150 wpm ≈ 2.5 chars/s)
-        time.sleep(max(2.0, len(text) / 10))
+        proc.wait(timeout=max(3, len(text) // 8))
     except FileNotFoundError:
         try:
             import pyttsx3
@@ -85,24 +85,107 @@ def _speak(text: str):
             engine.runAndWait()
         except Exception as e:
             logger.warning("TTS failed: %s", e)
+    except Exception as e:
+        logger.warning("espeak failed: %s", e)
 
 
-# ── Call Handler ──────────────────────────────────────────────────────────────
+def lookup_contact(name_or_number: str) -> tuple[str, str]:
+    """
+    Returns (display_name, phone_number).
+    Tries ofono PBAP phonebook first, falls back to treating input as number.
+    """
+    import re
+    # Already a number
+    if re.match(r"^[+\d\s\-()]{5,}$", name_or_number.strip()):
+        return name_or_number.strip(), name_or_number.strip()
+
+    # Try fetching contacts via ofono PBAP
+    try:
+        import dbus
+        bus = dbus.SystemBus()
+        modem = _first_modem_path()
+        if modem:
+            pb = dbus.Interface(bus.get_object(OFONO_SERVICE, modem), OFONO_PBAP)
+            pb.Import("combined")   # pull contacts from phone
+            entries = pb.List()
+            query = name_or_number.lower()
+            for entry in entries:
+                entry_name   = str(entry.get("Name", "")).lower()
+                entry_number = str(entry.get("Number", ""))
+                if query in entry_name:
+                    return str(entry.get("Name", name_or_number)), entry_number
+    except Exception as e:
+        logger.debug("PBAP lookup failed: %s", e)
+
+    # Return as-is — let the user confirm
+    return name_or_number, name_or_number
+
+
+# ── outgoing call ─────────────────────────────────────────────────────────────
+
+def dial(number: str) -> tuple[bool, str]:
+    """
+    Dial a number via ofono HFP.
+    Returns (success, call_path_or_error).
+    """
+    if not _ensure_ofono():
+        return False, "ofono not running"
+    modem = _first_modem_path()
+    if not modem:
+        return False, "No phone modem found. Connect your phone via Bluetooth (HFP)."
+    try:
+        import dbus
+        bus = dbus.SystemBus()
+        vcm = dbus.Interface(bus.get_object(OFONO_SERVICE, modem), OFONO_VCMANAGER)
+        call_path = vcm.Dial(number, "default")
+        logger.info("Dialing %s → call path: %s", number, call_path)
+        return True, str(call_path)
+    except Exception as e:
+        logger.error("Dial failed: %s", e)
+        return False, str(e)
+
+
+def hangup_call(call_path: str) -> bool:
+    try:
+        import dbus
+        bus = dbus.SystemBus()
+        call_iface = dbus.Interface(bus.get_object(OFONO_SERVICE, call_path), OFONO_VCALL)
+        call_iface.Hangup()
+        return True
+    except Exception as e:
+        logger.error("Hangup failed: %s", e)
+        return False
+
+
+def hangup_all() -> bool:
+    """Hang up all active calls on the modem."""
+    modem = _first_modem_path()
+    if not modem:
+        return False
+    try:
+        import dbus
+        bus = dbus.SystemBus()
+        vcm = dbus.Interface(bus.get_object(OFONO_SERVICE, modem), OFONO_VCMANAGER)
+        vcm.HangupAll()
+        return True
+    except Exception as e:
+        logger.error("HangupAll failed: %s", e)
+        return False
+
+
+# ── Call Handler (incoming monitor) ──────────────────────────────────────────
 
 class BluetoothCallHandler:
     """
-    Monitors ofono for incoming calls on the paired phone.
-    Calls on_incoming_call(caller, answer_cb, reject_cb) when a call arrives.
-    answer_cb(message) → answers call and speaks message
-    reject_cb()        → rejects call silently
+    Monitors ofono for incoming calls.
+    on_incoming_call(caller_name, caller_number, answer_cb, reject_cb)
     """
 
     def __init__(self, on_incoming_call: Callable):
         self.on_incoming_call = on_incoming_call
-        self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
         self._active = False
-        self._loop = None
+        self._loop   = None
+        self._thread: Optional[threading.Thread] = None
 
     def start(self) -> str:
         if self._active:
@@ -110,28 +193,23 @@ class BluetoothCallHandler:
         if not _ensure_ofono():
             return (
                 "❌ ofono not available.\n"
-                "Install it:  sudo pacman -S ofono\n"
-                "Then start:  sudo systemctl enable --now ofono\n"
-                "And pair your phone with HFP profile."
+                "Run:  sudo pacman -S ofono\n"
+                "Then: sudo systemctl enable --now ofono\n"
+                "On your phone: Bluetooth → PC → enable 'Phone calls'"
             )
         modems = _get_modems()
         if not modems:
             return (
-                "❌ No phone modem found via ofono.\n"
-                "Make sure your phone is:\n"
-                "  1. Paired via Bluetooth\n"
-                "  2. Connected with HFP (Hands-Free) profile\n"
-                "  3. ofono is running: sudo systemctl start ofono"
+                "❌ No phone modem found.\n"
+                "Make sure your POCO is connected via Bluetooth with HFP enabled.\n"
+                "On phone: Settings → Bluetooth → PC → Phone calls ✓"
             )
         self._active = True
-        self._stop.clear()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
-        modem_names = [str(p) for p, _ in modems]
-        return f"✅ Call handler active. Monitoring: {', '.join(modem_names)}"
+        return f"✅ Call handler active on {len(modems)} modem(s)"
 
     def stop(self):
-        self._stop.set()
         self._active = False
         if self._loop:
             try:
@@ -143,116 +221,83 @@ class BluetoothCallHandler:
         return self._active
 
     def _run_loop(self):
-        """Run dbus signal listener in its own GLib main loop."""
         try:
             import dbus
             import dbus.mainloop.glib
             from gi.repository import GLib
 
             dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
-            bus = dbus.SystemBus()
+            bus      = dbus.SystemBus()
             self._loop = GLib.MainLoop()
 
-            # Connect to CallAdded on every modem's VoiceCallManager
-            modems = _get_modems()
-            for modem_path, _ in modems:
-                try:
-                    vcm = bus.get_object(OFONO_SERVICE, modem_path)
-                    vcm_iface = dbus.Interface(vcm, OFONO_VCMANAGER)
-                    bus.add_signal_receiver(
-                        handler_function=self._on_call_added,
-                        signal_name="CallAdded",
-                        dbus_interface=OFONO_VCMANAGER,
-                        path=modem_path,
-                        path_keyword="modem_path"
-                    )
-                    logger.info("Watching modem %s for calls", modem_path)
-                except Exception as e:
-                    logger.warning("Could not watch modem %s: %s", modem_path, e)
+            for modem_path, _ in _get_modems():
+                bus.add_signal_receiver(
+                    handler_function=self._on_call_added,
+                    signal_name="CallAdded",
+                    dbus_interface=OFONO_VCMANAGER,
+                    path=str(modem_path),
+                    path_keyword="modem_path"
+                )
+                logger.info("Watching modem %s", modem_path)
 
-            # Also watch for new modems appearing
             bus.add_signal_receiver(
                 handler_function=self._on_modem_added,
                 signal_name="ModemAdded",
                 dbus_interface=OFONO_MANAGER
             )
 
-            logger.info("Call handler loop running")
             self._loop.run()
         except Exception as e:
             logger.error("Call handler loop error: %s", e)
         finally:
             self._active = False
-            logger.info("Call handler loop exited")
 
     def _on_modem_added(self, path, properties):
-        """Re-subscribe when a new modem (phone connects) appears."""
         try:
             import dbus
-            bus = dbus.SystemBus()
-            bus.add_signal_receiver(
+            dbus.SystemBus().add_signal_receiver(
                 handler_function=self._on_call_added,
                 signal_name="CallAdded",
                 dbus_interface=OFONO_VCMANAGER,
                 path=str(path),
                 path_keyword="modem_path"
             )
-            logger.info("New modem detected, watching: %s", path)
         except Exception as e:
             logger.warning("Failed to watch new modem: %s", e)
 
     def _on_call_added(self, call_path, properties, modem_path=None):
-        """Fired when an incoming call arrives."""
         try:
             state = str(properties.get("State", ""))
             if state not in ("incoming", "waiting"):
                 return
+            number = str(properties.get("LineIdentification", "Unknown"))
+            name   = str(properties.get("Name", "")) or number
+            logger.info("Incoming call from %s (%s)", name, number)
 
-            caller_number = str(properties.get("LineIdentification", "Unknown"))
-            caller_name   = str(properties.get("Name", "")) or caller_number
-
-            logger.info("Incoming call from %s (%s)", caller_name, caller_number)
-
-            call_path_str = str(call_path)
-            modem_str     = str(modem_path) if modem_path else None
+            call_str = str(call_path)
 
             def answer_cb(message: str):
-                self._answer_and_speak(call_path_str, modem_str, message)
+                try:
+                    import dbus
+                    bus = dbus.SystemBus()
+                    iface = dbus.Interface(bus.get_object(OFONO_SERVICE, call_str), OFONO_VCALL)
+                    iface.Answer()
+                    time.sleep(0.8)
+                    _speak(message)
+                    time.sleep(0.5)
+                    iface.Hangup()
+                except Exception as e:
+                    logger.error("Answer/speak failed: %s", e)
 
             def reject_cb():
-                self._reject_call(call_path_str)
+                try:
+                    import dbus
+                    bus = dbus.SystemBus()
+                    iface = dbus.Interface(bus.get_object(OFONO_SERVICE, call_str), OFONO_VCALL)
+                    iface.Hangup()
+                except Exception as e:
+                    logger.error("Reject failed: %s", e)
 
-            self.on_incoming_call(caller_name, caller_number, answer_cb, reject_cb)
-
+            self.on_incoming_call(name, number, answer_cb, reject_cb)
         except Exception as e:
             logger.error("Error handling incoming call: %s", e)
-
-    def _answer_and_speak(self, call_path: str, modem_path: Optional[str], message: str):
-        """Answer the call via ofono then speak the message."""
-        try:
-            import dbus
-            bus = dbus.SystemBus()
-            call_obj   = bus.get_object(OFONO_SERVICE, call_path)
-            call_iface = dbus.Interface(call_obj, OFONO_VCALL)
-            call_iface.Answer()
-            logger.info("Call answered: %s", call_path)
-            time.sleep(0.8)   # brief pause before speaking
-            _speak(message)
-            time.sleep(0.5)
-            # Hang up after delivering the message
-            call_iface.Hangup()
-            logger.info("Call hung up after message")
-        except Exception as e:
-            logger.error("Answer/speak failed: %s", e)
-
-    def _reject_call(self, call_path: str):
-        """Reject / decline the call."""
-        try:
-            import dbus
-            bus = dbus.SystemBus()
-            call_obj   = bus.get_object(OFONO_SERVICE, call_path)
-            call_iface = dbus.Interface(call_obj, OFONO_VCALL)
-            call_iface.Hangup()
-            logger.info("Call rejected: %s", call_path)
-        except Exception as e:
-            logger.error("Reject call failed: %s", e)

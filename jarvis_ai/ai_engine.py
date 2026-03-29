@@ -633,6 +633,8 @@ UTILITIES:
 - search_github: "search github", "find on github", "github search", "look for on github", "how many repositories does USER have", "github profile stats", "repo count for USER"
 - open_whatsapp_contact: "whatsapp", "message on whatsapp", "open whatsapp contact", "whatsapp contact"
 - send_whatsapp_message: "send whatsapp message", "message CONTACT on whatsapp", "send CONTACT MESSAGE on whatsapp"
+- make_call: "call", "phone", "dial", "ring", "call mom", "call 9876543210", "phone dad" → contact=name_or_number
+- hangup_call: "hang up", "end call", "disconnect call", "cancel call"
 - preview_automation: "preview automation", "show automation steps", "dry run automation"
 - pause_automation: "pause automation"
 - resume_automation: "resume automation"

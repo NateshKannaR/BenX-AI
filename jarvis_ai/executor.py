@@ -302,6 +302,10 @@ class CommandExecutor:
                 ),
                 "email_search": lambda: CommandEngine.email_search(obj.get("query", "")),
 
+                # Phone calls
+                "make_call": lambda: CommandExecutor._make_call(obj.get("contact", obj.get("query", obj.get("text", ""))), ai_engine),
+                "hangup_call": lambda: CommandExecutor._hangup_call(),
+
                 # Browser Automation
                 "browser_open": lambda: CommandEngine.browser_open(obj.get("url", "")),
                 "browser_scrape": lambda: CommandEngine.browser_scrape(obj.get("url", ""), obj.get("query", "body")),
@@ -738,6 +742,39 @@ class CommandExecutor:
         assistant = CommandExecutor._get_developer_assistant()
         return assistant.memory.recall(obj.get("category"))
     
+    @staticmethod
+    def _make_call(contact: str, ai_engine) -> str:
+        """Trigger outgoing call popup via the GUI."""
+        if not contact:
+            return "❌ Who do you want to call? Say 'call mom' or 'call 9876543210'"
+        # Try to reach the GUI window to show the popup
+        try:
+            from gi.repository import GLib
+            # Walk all GTK windows to find BeautifulBenXGTK4
+            import gi
+            gi.require_version('Gtk', '4.0')
+            from gi.repository import Gtk
+            app = Gtk.Application.get_default()
+            if app:
+                for win in app.get_windows():
+                    if hasattr(win, 'make_call'):
+                        GLib.idle_add(win.make_call, contact)
+                        return f"📞 Opening call dialog for '{contact}'…"
+        except Exception as e:
+            logger.warning("Could not reach GUI for call: %s", e)
+        # Fallback: dial directly without popup
+        from jarvis_ai.call_handler import lookup_contact, dial
+        display_name, number = lookup_contact(contact)
+        if number == contact and not contact.replace('+','').replace(' ','').isdigit():
+            return f"❌ Could not find number for '{contact}'. Try saying the number directly."
+        success, result = dial(number)
+        return f"📞 Calling {display_name}…" if success else f"❌ Call failed: {result}"
+
+    @staticmethod
+    def _hangup_call() -> str:
+        from jarvis_ai.call_handler import hangup_all
+        return "📵 Call ended." if hangup_all() else "❌ No active call to hang up."
+
     @staticmethod
     def _handle_project_task(ai_engine: AIEngine, user_input: str, base_path: str) -> str:
         """Handle project orchestration tasks"""
