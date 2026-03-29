@@ -13,6 +13,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from jarvis_ai.gui.meet_overlay import MeetAnswerOverlay, is_question
+from jarvis_ai.call_handler import BluetoothCallHandler
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ class BeautifulBenXGTK4(Adw.ApplicationWindow):
         self.last_benx_message = ""
         self.pending_image_path = None  # Image to attach to next message
         self._meet_overlay: MeetAnswerOverlay = None
+        self._call_handler: BluetoothCallHandler = None
         self.setup_gui()
         
         # Setup keyboard shortcuts
@@ -1647,6 +1649,14 @@ class BeautifulBenXGTK4(Adw.ApplicationWindow):
         self.compact_sysaudio_btn.connect("clicked", self.on_compact_sysaudio_clicked)
         input_bar.append(self.compact_sysaudio_btn)
 
+        # phone / call handler button
+        self.compact_call_btn = Gtk.Button()
+        self.compact_call_btn.set_child(Gtk.Image.new_from_icon_name("phone-symbolic"))
+        self.compact_call_btn.add_css_class("cw-btn-icon")
+        self.compact_call_btn.set_tooltip_text("Auto-answer phone calls via Bluetooth")
+        self.compact_call_btn.connect("clicked", self.on_call_handler_toggle)
+        input_bar.append(self.compact_call_btn)
+
         # send button
         send_btn = Gtk.Button()
         send_btn.set_child(Gtk.Image.new_from_icon_name("go-next-symbolic"))
@@ -1730,6 +1740,85 @@ class BeautifulBenXGTK4(Adw.ApplicationWindow):
         else:
             self.log_activity("❌ Voice: nothing heard")
             self.add_compact_message("BenX", "❌ Couldn't hear anything. Try again.")
+
+    def on_call_handler_toggle(self, widget):
+        """Toggle Bluetooth call handler on/off."""
+        if self._call_handler and self._call_handler.is_active():
+            self._call_handler.stop()
+            self.compact_call_btn.remove_css_class("cw-btn-sysaudio-on")
+            if hasattr(self, 'cw_status_lbl'):
+                self.cw_status_lbl.set_text("")
+            self.add_compact_message("BenX", "📵 Call handler stopped.")
+            self.log_activity("📵 Call handler stopped")
+        else:
+            if self._call_handler is None:
+                self._call_handler = BluetoothCallHandler(
+                    on_incoming_call=self._on_incoming_call
+                )
+            result = self._call_handler.start()
+            if result.startswith("✅"):
+                self.compact_call_btn.add_css_class("cw-btn-sysaudio-on")
+                if hasattr(self, 'cw_status_lbl'):
+                    self.cw_status_lbl.set_markup("<span foreground='#68d391'>● CALL</span>")
+                self.log_activity("📞 Call handler active")
+            self.add_compact_message("BenX", result)
+
+    def _on_incoming_call(self, caller_name: str, caller_number: str,
+                          answer_cb, reject_cb):
+        """Called from call_handler thread when phone rings."""
+        GLib.idle_add(self._show_call_popup, caller_name, caller_number,
+                      answer_cb, reject_cb)
+
+    def _show_call_popup(self, caller_name: str, caller_number: str,
+                         answer_cb, reject_cb):
+        """Show incoming call popup on the main thread."""
+        self.log_activity(f"📞 Incoming call from {caller_name}")
+        self.add_compact_message("📞 Call", f"Incoming call from {caller_name} ({caller_number})")
+
+        dialog = Adw.MessageDialog.new(self.compact_win if hasattr(self, 'compact_win') and self.compact_win else self)
+        dialog.set_heading(f"📞 Incoming Call")
+        dialog.set_body(
+            f"From: {caller_name}\n{caller_number}\n\n"
+            f"What should BenX say?\n"
+            f"(Leave blank to reject)"
+        )
+
+        # Text entry for custom message
+        entry = Gtk.Entry()
+        entry.set_placeholder_text("e.g. I'm busy right now, I'll call you back")
+        entry.set_margin_start(12)
+        entry.set_margin_end(12)
+        entry.set_margin_bottom(8)
+        dialog.set_extra_child(entry)
+
+        dialog.add_response("reject", "Reject")
+        dialog.add_response("busy",   "I'm Busy")
+        dialog.add_response("answer", "Answer & Speak")
+        dialog.set_response_appearance("answer", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_response_appearance("reject", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("answer")
+        dialog.set_close_response("reject")
+
+        def on_response(dlg, response_id):
+            if response_id == "reject":
+                reject_cb()
+                self.add_compact_message("BenX", f"📵 Rejected call from {caller_name}")
+                self.log_activity(f"📵 Rejected call from {caller_name}")
+            elif response_id == "busy":
+                msg = "Hi, I'm busy right now. I'll call you back soon."
+                threading.Thread(target=answer_cb, args=(msg,), daemon=True).start()
+                self.add_compact_message("BenX", f"📞 Answered & said: {msg}")
+                self.log_activity(f"📞 Auto-answered: busy")
+            elif response_id == "answer":
+                custom = entry.get_text().strip()
+                msg = custom if custom else "Hello! I'll get back to you shortly."
+                threading.Thread(target=answer_cb, args=(msg,), daemon=True).start()
+                self.add_compact_message("BenX", f"📞 Answered & said: {msg}")
+                self.log_activity(f"📞 Auto-answered with message")
+
+        dialog.connect("response", on_response)
+        dialog.present()
+        return False
 
     def on_compact_sysaudio_clicked(self, widget):
         if getattr(self, '_sysaudio_active', False):
