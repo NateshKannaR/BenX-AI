@@ -12,6 +12,7 @@ import math
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from jarvis_ai.gui.meet_overlay import MeetAnswerOverlay, is_question
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ class BeautifulBenXGTK4(Adw.ApplicationWindow):
         self.message_history = []  # Store all messages for syncing
         self.last_benx_message = ""
         self.pending_image_path = None  # Image to attach to next message
+        self._meet_overlay: MeetAnswerOverlay = None
         self.setup_gui()
         
         # Setup keyboard shortcuts
@@ -569,7 +571,6 @@ class BeautifulBenXGTK4(Adw.ApplicationWindow):
                 background: transparent;
                 border: none;
                 padding: 0;
-                -gtk-outline-radius: 0;
             }
 
             .metric-bar progress {
@@ -1747,7 +1748,7 @@ class BeautifulBenXGTK4(Adw.ApplicationWindow):
             self.log_activity("🔊 System audio monitor started")
             self.add_compact_message("BenX", "🔊 Listening to system audio. I'll respond to anything I hear from your speakers.")
             self.voice_handler.start_system_audio_monitor(
-                on_speech_cb=self._on_system_audio_speech,
+                on_speech_cb=self._on_system_audio_speech_cb,
                 chunk_duration=8
             )
 
@@ -1827,7 +1828,9 @@ class BeautifulBenXGTK4(Adw.ApplicationWindow):
             logger.debug("Failed to remove temp wav file: %s", e)
         if text and text.strip():
             GLib.idle_add(self._handle_wake_command, text.strip())
-        """Called when system audio speech is detected."""
+
+    def _on_system_audio_speech_cb(self, text: str):
+        """Called from voice_handler thread when system audio speech is detected."""
         if not getattr(self, '_sysaudio_active', False):
             return
         GLib.idle_add(self._handle_system_audio_text, text)
@@ -1836,12 +1839,45 @@ class BeautifulBenXGTK4(Adw.ApplicationWindow):
         """Handle transcribed system audio on main thread."""
         self.log_activity(f"🔊 Heard: {text[:50]}")
         self.add_compact_message("🔊 System", text)
-        # Process through BenX AI
-        threading.Thread(
-            target=self.process_compact_command,
-            args=(f"I heard this from system audio: {text}",),
-            daemon=True
-        ).start()
+
+        if is_question(text):
+            # Show overlay with AI answer
+            overlay = self._get_meet_overlay()
+            overlay.show_thinking(text)
+            threading.Thread(
+                target=self._answer_meet_question,
+                args=(text,),
+                daemon=True
+            ).start()
+        else:
+            # Non-question system audio — pass to BenX as context
+            threading.Thread(
+                target=self.process_compact_command,
+                args=(f"I heard this from system audio: {text}",),
+                daemon=True
+            ).start()
+
+    def _get_meet_overlay(self) -> MeetAnswerOverlay:
+        if self._meet_overlay is None:
+            self._meet_overlay = MeetAnswerOverlay(self.get_application())
+        return self._meet_overlay
+
+    def _answer_meet_question(self, question: str):
+        """Generate AI answer for a meet question and push to overlay."""
+        try:
+            system_prompt = (
+                "You are BenX, an expert assistant helping the user answer questions "
+                "asked during a video call or meeting. Give a clear, concise, and "
+                "accurate answer. Use bullet points for multi-part answers. "
+                "Keep it under 120 words unless the question demands more detail."
+            )
+            answer = self.ai_engine.query_groq(system_prompt, question)
+        except Exception as e:
+            answer = f"❌ Could not generate answer: {e}"
+        overlay = self._get_meet_overlay()
+        overlay.show_answer(question, answer)
+        # Also echo into compact chat for the record
+        GLib.idle_add(self.add_compact_message, "BenX", f"💡 {answer}")
 
     def on_compact_send(self, widget):
         """Send message from compact mode"""
