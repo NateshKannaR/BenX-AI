@@ -1779,7 +1779,7 @@ class BeautifulBenXGTK4(Adw.ApplicationWindow):
             if response_id != "call":
                 return
             final_number = entry.get_text().strip() or number
-            if not final_number or final_number == name_or_number:
+            if not final_number:
                 self.add_compact_message("BenX", "❌ No number found. Please enter a phone number.")
                 return
             threading.Thread(
@@ -1805,23 +1805,72 @@ class BeautifulBenXGTK4(Adw.ApplicationWindow):
             GLib.idle_add(self.log_activity, f"❌ Call failed: {result}")
 
     def _show_active_call_popup(self, display_name: str, number: str, call_path: str):
+        from jarvis_ai.call_handler import _speak
         parent = self.compact_win if (hasattr(self, 'compact_win') and self.compact_win) else self
 
-        dialog = Adw.MessageDialog.new(parent)
-        dialog.set_heading("📞 Call in Progress")
-        dialog.set_body(f"Connected to {display_name}\n{number}")
-        dialog.add_response("hangup", "Hang Up")
-        dialog.set_response_appearance("hangup", Adw.ResponseAppearance.DESTRUCTIVE)
-        dialog.set_default_response("hangup")
-        dialog.set_close_response("hangup")
+        win = Gtk.Window()
+        win.set_title("📞 Call in Progress")
+        win.set_transient_for(parent)
+        win.set_modal(True)
+        win.set_default_size(360, 220)
+        win.set_deletable(False)
 
-        def on_response(dlg, response_id):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.set_margin_top(20)
+        box.set_margin_bottom(20)
+        box.set_margin_start(20)
+        box.set_margin_end(20)
+
+        lbl = Gtk.Label(label=f"📞 Connected to {display_name}\n{number}")
+        lbl.set_justify(Gtk.Justification.CENTER)
+        box.append(lbl)
+
+        # Text entry row
+        entry_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        entry = Gtk.Entry()
+        entry.set_placeholder_text("Type what to say on the call…")
+        entry.set_hexpand(True)
+        send_btn = Gtk.Button(label="📢 Send")
+        send_btn.add_css_class("suggested-action")
+        entry_row.append(entry)
+        entry_row.append(send_btn)
+        box.append(entry_row)
+
+        status_lbl = Gtk.Label(label="Type a message and press Send")
+        status_lbl.set_justify(Gtk.Justification.CENTER)
+        box.append(status_lbl)
+
+        hangup_btn = Gtk.Button(label="📵 Hang Up")
+        hangup_btn.add_css_class("destructive-action")
+        box.append(hangup_btn)
+
+        win.set_child(box)
+
+        def _do_speak(text: str):
+            GLib.idle_add(status_lbl.set_text, f"🗣️ Saying: {text}")
+            GLib.idle_add(send_btn.set_sensitive, False)
+            self.add_compact_message("You (call)", text)
+            _speak(text)
+            GLib.idle_add(status_lbl.set_text, "✅ Done. Type another message to speak again.")
+            GLib.idle_add(send_btn.set_sensitive, True)
+
+        def on_send(btn):
+            text = entry.get_text().strip()
+            if not text:
+                return
+            entry.set_text("")
+            threading.Thread(target=_do_speak, args=(text,), daemon=True).start()
+
+        def on_hangup(btn):
             threading.Thread(target=hangup_all, daemon=True).start()
             self.add_compact_message("BenX", f"📵 Call ended with {display_name}")
             self.log_activity(f"📵 Call ended: {display_name}")
+            win.close()
 
-        dialog.connect("response", on_response)
-        dialog.present()
+        send_btn.connect("clicked", on_send)
+        entry.connect("activate", on_send)  # Enter key also sends
+        hangup_btn.connect("clicked", on_hangup)
+        win.present()
         return False
 
     def on_call_handler_toggle(self, widget):
@@ -1976,10 +2025,11 @@ class BeautifulBenXGTK4(Adw.ApplicationWindow):
         self.add_compact_message("You", command)
         if hasattr(self, 'cw_status_lbl'):
             self.cw_status_lbl.set_markup("<span foreground='#f6ad55'>&#9679; WAKE</span>")
-        # Process through BenX
+        # Process through BenX — speak=True so response is voiced after wake word
         threading.Thread(
             target=self.process_compact_command,
             args=(command,),
+            kwargs={"speak": True},
             daemon=True
         ).start()
 
@@ -1999,7 +2049,7 @@ class BeautifulBenXGTK4(Adw.ApplicationWindow):
         except OSError as e:
             logger.debug("Failed to remove temp wav file: %s", e)
         if text and text.strip():
-            GLib.idle_add(self._handle_wake_command, text.strip())
+            GLib.idle_add(self._handle_wake_command, text.strip())  # speak=True flows through _handle_wake_command
 
     def _on_system_audio_speech_cb(self, text: str):
         """Called from voice_handler thread when system audio speech is detected."""
@@ -2187,7 +2237,7 @@ class BeautifulBenXGTK4(Adw.ApplicationWindow):
         msg_box.append(text_lbl)
         self.compact_chat_box.append(msg_box)
     
-    def process_compact_command(self, text, image_path=None):
+    def process_compact_command(self, text, image_path=None, speak=False):
         """Process command from compact mode"""
         try:
             if image_path:
@@ -2196,6 +2246,8 @@ class BeautifulBenXGTK4(Adw.ApplicationWindow):
                 response = self._run_agent_or_fallback(text)
             GLib.idle_add(self.add_chat_message, "BenX", response)
             GLib.idle_add(self.add_compact_message, "BenX", response)
+            if speak and hasattr(self, 'voice_handler'):
+                self.voice_handler.speak(response)
         except Exception as e:
             GLib.idle_add(self.add_chat_message, "BenX", f"Error: {str(e)}")
             GLib.idle_add(self.add_compact_message, "BenX", f"Error: {str(e)}")

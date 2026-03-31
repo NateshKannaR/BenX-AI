@@ -644,7 +644,7 @@ UTILITIES:
 - cancel_scheduled_task: "cancel scheduled task", "remove reminder"
 
 DEVELOPER:
-- analyze_project: "analyze project", "inspect repo", "what kind of project is this", "analyze this repository", "analyze all code", "summarize this codebase", "what is in this repo"
+- analyze_project: "analyze project", "inspect repo", "what kind of project is this", "analyze this repository", "analyze all code", "summarize this codebase", "what is in this repo", "information about folder", "info about folder", "tell me about folder", "what is in folder", "what's in folder", "describe folder", "about this folder", "about the folder", "analyze folder", "check folder", "look at folder" → path=folder_path (expand ~ to /home/user)
 - search_code: "find in code", "search code", "find all uses"
 - find_symbol: "find symbol", "where is this class used", "where is this function used"
 - list_todos: "list todos", "show fixmes"
@@ -716,7 +716,7 @@ PROJECT TASK DETECTION:
 COMMAND VS QUESTION:
 - COMMANDS (execute actions): "create", "open", "install", "delete", "move", "copy", "automate", "set", "increase", "decrease", "kill", "play", "pause", "analyze"
 - QUESTIONS (conversation): "what", "how", "why", "when", "where", "explain", "tell me about", "describe"
-- Questions about a local repository, codebase, or project structure should use analyze_project.
+- Questions about a local repository, codebase, folder, or project structure should use analyze_project with path= set to the mentioned folder/directory path (expand ~ properly, e.g. ~/Quant_stock → /home/natesh/Quant_stock).
 - Questions about GitHub users, repository counts, or GitHub profile stats should use search_github.
 - If it's clearly a QUESTION or CONVERSATION (not a command), return: {"command":"none"}
 - Be AGGRESSIVE about recognizing commands - prefer action over conversation

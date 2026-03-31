@@ -4,6 +4,7 @@ Command Executor - Execute parsed commands
 import json
 import logging
 import os
+from pathlib import Path
 from datetime import datetime, timedelta
 from jarvis_ai.ai_engine import AIEngine
 from jarvis_ai.command_engine import CommandEngine
@@ -699,7 +700,7 @@ class CommandExecutor:
     @staticmethod
     def _analyze_project(obj: dict, user_input: str) -> str:
         assistant = CommandExecutor._get_developer_assistant()
-        base_path = obj.get("path", ".")
+        base_path = str(Path(obj.get("path", ".")).expanduser().resolve())
         request = obj.get("query") or user_input
         return assistant.analyze_project(base_path, request)
 

@@ -34,18 +34,31 @@ OFONO_PBAP      = "org.ofono.PhonebookAccess"
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _ensure_ofono() -> bool:
+    # Check package installed first
+    if subprocess.run(["pacman", "-Q", "ofono"],
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+        logger.warning("ofono not installed. Run: sudo pacman -S ofono")
+        return False
+    # Check dbus Python module
     try:
         import dbus
+        import dbus.mainloop.glib
+        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    except ImportError:
+        logger.warning("python-dbus not installed. Run: sudo pacman -S python-dbus")
+        return False
+    # Try connecting to running ofono
+    try:
         dbus.SystemBus().get_object(OFONO_SERVICE, "/")
         return True
     except Exception:
         pass
+    # Try starting the service
     try:
         subprocess.run(["sudo", "systemctl", "start", "ofono"],
                        timeout=8, check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(2)
-        import dbus
         dbus.SystemBus().get_object(OFONO_SERVICE, "/")
         return True
     except Exception as e:
@@ -69,24 +82,91 @@ def _first_modem_path() -> Optional[str]:
     return str(modems[0][0]) if modems else None
 
 
-def _speak(text: str):
+def _acquire_sco_fd():
+    """Acquire SCO socket fd from ofono HandsfreeAudioCard. Returns (fd, codec) or (None, None)."""
     try:
-        proc = subprocess.Popen(
+        import dbus
+        bus = dbus.SystemBus()
+        mgr = dbus.Interface(bus.get_object(OFONO_SERVICE, "/"), "org.ofono.HandsfreeAudioManager")
+        cards = mgr.GetCards()
+        if not cards:
+            return None, None
+        card_path = str(cards[0][0])
+        card = dbus.Interface(bus.get_object(OFONO_SERVICE, card_path), "org.ofono.HandsfreeAudioCard")
+        fd, codec = card.Acquire()
+        return fd.take(), int(codec)
+    except Exception as e:
+        logger.warning("SCO acquire failed: %s", e)
+        return None, None
+
+
+def _speak(text: str):
+    """Speak text over the active HFP call via SCO, fallback to local speakers."""
+    import os
+    fd, codec = _acquire_sco_fd()
+    if fd is not None:
+        try:
+            # codec 1=CVSD=8kHz, codec 2=mSBC=16kHz
+            rate = 16000 if codec == 2 else 8000
+            # SCO MTU=48 bytes, interval = 48bytes / (rate * 2bytes) seconds
+            chunk = 48
+            interval = chunk / (rate * 2)  # seconds per chunk
+
+            espeak = subprocess.Popen(
+                ["espeak", "-s", "140", "-v", "en", "--stdout", text],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+            )
+            ffmpeg = subprocess.Popen(
+                ["ffmpeg", "-y",
+                 "-f", "wav", "-i", "pipe:0",
+                 "-ar", str(rate), "-ac", "1",
+                 "-f", "s16le", "pipe:1"],
+                stdin=espeak.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL
+            )
+            espeak.stdout.close()
+
+            import socket
+            sock = socket.fromfd(fd, socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET)
+            os.close(fd)  # fromfd dups it, close original
+
+            next_send = time.monotonic()
+            while True:
+                data = ffmpeg.stdout.read(chunk)
+                if not data:
+                    break
+                # pad to full chunk so SCO packet is always correct size
+                if len(data) < chunk:
+                    data = data + b'\x00' * (chunk - len(data))
+                # pace writes to match real-time audio rate
+                now = time.monotonic()
+                if next_send > now:
+                    time.sleep(next_send - now)
+                try:
+                    sock.send(data)
+                except OSError:
+                    break
+                next_send += interval
+
+            sock.close()
+            ffmpeg.wait(timeout=5)
+            espeak.wait(timeout=5)
+            return
+        except Exception as e:
+            logger.warning("SCO speak failed: %s", e)
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    # fallback — local speakers
+    try:
+        subprocess.Popen(
             ["espeak", "-s", "140", "-v", "en", text],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        proc.wait(timeout=max(3, len(text) // 8))
-    except FileNotFoundError:
-        try:
-            import pyttsx3
-            engine = pyttsx3.init()
-            engine.setProperty("rate", 140)
-            engine.say(text)
-            engine.runAndWait()
-        except Exception as e:
-            logger.warning("TTS failed: %s", e)
+        ).wait(timeout=max(3, len(text) // 8))
     except Exception as e:
-        logger.warning("espeak failed: %s", e)
+        logger.warning("espeak fallback failed: %s", e)
 
 
 def lookup_contact(name_or_number: str) -> tuple[str, str]:
@@ -123,6 +203,25 @@ def lookup_contact(name_or_number: str) -> tuple[str, str]:
 
 # ── outgoing call ─────────────────────────────────────────────────────────────
 
+def _ensure_modem_online(modem_path: str) -> tuple[bool, str]:
+    """Power on and bring modem online if needed."""
+    try:
+        import dbus
+        bus = dbus.SystemBus()
+        modem = dbus.Interface(bus.get_object(OFONO_SERVICE, modem_path), "org.ofono.Modem")
+        props = modem.GetProperties()
+        if not props.get("Powered", False):
+            modem.SetProperty("Powered", dbus.Boolean(True))
+            time.sleep(3)
+            props = modem.GetProperties()
+        if not props.get("Online", False):
+            modem.SetProperty("Online", dbus.Boolean(True))
+            time.sleep(2)
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
 def dial(number: str) -> tuple[bool, str]:
     """
     Dial a number via ofono HFP.
@@ -133,6 +232,9 @@ def dial(number: str) -> tuple[bool, str]:
     modem = _first_modem_path()
     if not modem:
         return False, "No phone modem found. Connect your phone via Bluetooth (HFP)."
+    ok, err = _ensure_modem_online(modem)
+    if not ok:
+        return False, f"Modem offline (enable 'Phone calls' on your phone's Bluetooth settings): {err}"
     try:
         import dbus
         bus = dbus.SystemBus()
@@ -226,8 +328,8 @@ class BluetoothCallHandler:
             import dbus.mainloop.glib
             from gi.repository import GLib
 
-            dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
-            bus      = dbus.SystemBus()
+            main_loop = dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+            bus      = dbus.SystemBus(mainloop=main_loop)
             self._loop = GLib.MainLoop()
 
             for modem_path, _ in _get_modems():

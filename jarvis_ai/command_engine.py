@@ -538,32 +538,119 @@ class CommandEngine:
     
     @staticmethod
     def create_pdf(content: str, output_path: str) -> str:
-        """Create a PDF file from text content"""
+        """Create a PDF using pure Python stdlib — no dependencies needed."""
+        import struct, zlib, time
+
+        if not output_path:
+            output_path = os.path.expanduser("~/benx_output.pdf")
+        output_path = os.path.expanduser(output_path)
+        os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else ".", exist_ok=True)
+
+        # ── page geometry ──────────────────────────────────────────────────────
+        PW, PH   = 595, 842          # A4 points
+        MARGIN   = 50
+        LINE_H   = 14
+        FONT_SZ  = 11
+        MAX_W    = PW - 2 * MARGIN   # ~495 pts  ≈ 82 chars at 6pt/char
+        CHARS_PER_LINE = MAX_W // (FONT_SZ * 0.55)  # rough estimate
+
+        # ── word-wrap lines ────────────────────────────────────────────────────
+        def wrap(text: str) -> list:
+            out = []
+            for raw in text.split("\n"):
+                if not raw.strip():
+                    out.append("")
+                    continue
+                words, cur = raw.split(), ""
+                for w in words:
+                    if len(cur) + len(w) + 1 <= CHARS_PER_LINE:
+                        cur = (cur + " " + w).lstrip()
+                    else:
+                        if cur:
+                            out.append(cur)
+                        cur = w
+                if cur:
+                    out.append(cur)
+            return out
+
+        lines = wrap(content)
+
+        # ── build PDF pages ────────────────────────────────────────────────────
+        def _page_stream(page_lines):
+            ops = []
+            ops.append(f"BT")
+            ops.append(f"/F1 {FONT_SZ} Tf")
+            y = PH - MARGIN
+            for ln in page_lines:
+                safe = ln.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+                ops.append(f"{MARGIN} {y} Td" if y == PH - MARGIN else f"0 -{LINE_H} Td")
+                ops.append(f"({safe}) Tj")
+                y -= LINE_H
+            ops.append("ET")
+            return "\n".join(ops).encode()
+
+        lines_per_page = (PH - 2 * MARGIN) // LINE_H
+        pages = [lines[i:i + lines_per_page] for i in range(0, max(len(lines), 1), lines_per_page)]
+
+        # ── assemble PDF objects ───────────────────────────────────────────────
+        buf = bytearray()
+        offsets = []
+
+        def add(obj_id, data: bytes):
+            offsets.append((obj_id, len(buf)))
+            buf.extend(f"{obj_id} 0 obj\n".encode())
+            buf.extend(data)
+            buf.extend(b"\nendobj\n")
+
+        buf.extend(b"%PDF-1.4\n")
+
+        # obj 1 = catalog, obj 2 = pages (filled later), obj 3 = font
+        # page objects start at 4
+        page_obj_ids = list(range(4, 4 + len(pages)))
+        stream_obj_ids = list(range(4 + len(pages), 4 + 2 * len(pages)))
+
+        # font
+        add(3, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+
+        # page streams
+        for i, pg in enumerate(pages):
+            s = _page_stream(pg)
+            add(stream_obj_ids[i],
+                f"<< /Length {len(s)} >>\nstream\n".encode() + s + b"\nendstream")
+
+        # page objects
+        for i, oid in enumerate(page_obj_ids):
+            add(oid,
+                f"<< /Type /Page /Parent 2 0 R "
+                f"/MediaBox [0 0 {PW} {PH}] "
+                f"/Contents {stream_obj_ids[i]} 0 R "
+                f"/Resources << /Font << /F1 3 0 R >> >> >>".encode())
+
+        # pages dict
+        kids = " ".join(f"{oid} 0 R" for oid in page_obj_ids)
+        add(2, f"<< /Type /Pages /Kids [{kids}] /Count {len(pages)} >>".encode())
+
+        # catalog
+        add(1, b"<< /Type /Catalog /Pages 2 0 R >>")
+
+        # xref
+        xref_pos = len(buf)
+        all_objs = sorted(offsets, key=lambda x: x[0])
+        buf.extend(f"xref\n0 {len(all_objs)+1}\n".encode())
+        buf.extend(b"0000000000 65535 f \n")
+        for _, off in all_objs:
+            buf.extend(f"{off:010d} 00000 n \n".encode())
+        buf.extend(
+            f"trailer\n<< /Size {len(all_objs)+1} /Root 1 0 R >>\n"
+            f"startxref\n{xref_pos}\n%%EOF\n".encode()
+        )
+
         try:
-            try:
-                from reportlab.lib.pagesizes import letter
-                from reportlab.pdfgen import canvas
-                
-                output_path = os.path.expanduser(output_path)
-                os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
-                
-                c = canvas.Canvas(output_path, pagesize=letter)
-                width, height = letter
-                
-                y = height - 50
-                for line in content.split('\n'):
-                    if y < 50:
-                        c.showPage()
-                        y = height - 50
-                    c.drawString(50, y, line[:100])
-                    y -= 20
-                
-                c.save()
-                return f"✅ Created PDF: {output_path}"
-            except ImportError:
-                return "❌ PDF creation failed. Install: pip install reportlab"
+            with open(output_path, "wb") as f:
+                f.write(buf)
+            return f"✅ Created PDF: {output_path}"
         except Exception as e:
-            return f"❌ PDF creation error: {str(e)}"
+            return f"❌ PDF write error: {e}"
     
     @staticmethod
     def open_file(path: str) -> str:
