@@ -39,19 +39,16 @@ def find_tool(tools: List[str]) -> Optional[str]:
 def safe_open_app(app: Union[str, List[str]]) -> bool:
     """Safely open application in background"""
     try:
+        import time
         env = os.environ.copy()
-        if isinstance(app, str):
-            args = shlex.split(app)
-        else:
-            args = app
+        args = shlex.split(app) if isinstance(app, str) else app
         process = subprocess.Popen(
             args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL, start_new_session=True, env=env
         )
-        import time
         time.sleep(0.2)
         return process.poll() is None
-    except:
+    except Exception:
         return False
 
 def ensure_dir(path: Path) -> Path:
@@ -63,7 +60,7 @@ def get_file_size(path: Path) -> int:
     """Get file size in bytes"""
     try:
         return path.stat().st_size
-    except:
+    except Exception:
         return 0
 
 

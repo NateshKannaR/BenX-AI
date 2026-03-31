@@ -108,19 +108,22 @@ class MemoryAgent:
         
         # Detect framework
         if (base / "requirements.txt").exists():
-            structure["framework"] = "flask"  # Default, can be refined
-            with open(base / "requirements.txt", 'r') as f:
-                content = f.read()
-                if "fastapi" in content.lower():
-                    structure["framework"] = "fastapi"
-                elif "django" in content.lower():
-                    structure["framework"] = "django"
-                elif "flask" in content.lower():
-                    structure["framework"] = "flask"
+            structure["framework"] = "flask"
+            try:
+                with open(base / "requirements.txt", 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    if "fastapi" in content.lower():
+                        structure["framework"] = "fastapi"
+                    elif "django" in content.lower():
+                        structure["framework"] = "django"
+                    elif "flask" in content.lower():
+                        structure["framework"] = "flask"
+            except OSError:
+                pass
         elif (base / "package.json").exists():
             structure["framework"] = "node"
-            with open(base / "package.json", 'r') as f:
-                try:
+            try:
+                with open(base / "package.json", 'r', encoding='utf-8') as f:
                     pkg = json.load(f)
                     deps = pkg.get("dependencies", {})
                     if "react" in deps:
@@ -129,8 +132,8 @@ class MemoryAgent:
                         structure["framework"] = "vue"
                     elif "express" in deps:
                         structure["framework"] = "express"
-                except:
-                    pass
+            except (json.JSONDecodeError, OSError):
+                pass
         
         return structure
 

@@ -360,7 +360,7 @@ class CommandExecutor:
                             if corrected_action in command_map:
                                 logger.info(f"Retrying with learned correction")
                                 result = command_map[corrected_action]()
-                        except:
+                        except Exception:
                             pass
                 
                 return result

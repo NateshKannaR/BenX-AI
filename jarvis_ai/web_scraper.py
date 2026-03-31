@@ -4,9 +4,14 @@ Web Scraper - Extract data from websites intelligently
 import logging
 import requests
 from typing import Optional, Dict
-from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
+
+try:
+    from bs4 import BeautifulSoup
+    BS4_AVAILABLE = True
+except ImportError:
+    BS4_AVAILABLE = False
 
 
 class WebScraper:
@@ -20,6 +25,8 @@ class WebScraper:
     
     def scrape_url(self, url: str) -> Dict:
         """Scrape content from URL"""
+        if not BS4_AVAILABLE:
+            return {'success': False, 'error': 'beautifulsoup4 not installed. Run: pip install beautifulsoup4'}
         try:
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
@@ -73,6 +80,8 @@ class WebScraper:
     
     def search_google(self, query: str) -> str:
         """Search Google and return results"""
+        if not BS4_AVAILABLE:
+            return '❌ beautifulsoup4 not installed. Run: pip install beautifulsoup4'
         try:
             url = f"https://www.google.com/search?q={requests.utils.quote(query)}"
             response = self.session.get(url, timeout=10)

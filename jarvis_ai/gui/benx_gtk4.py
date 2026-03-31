@@ -300,9 +300,9 @@ class BenXGTK4(Adw.ApplicationWindow):
                 if battery:
                     status = "Charging" if battery.power_plugged else "Discharging"
                     self.battery_label.set_text(f"Battery: {battery.percent:.0f}% ({status})")
-            except:
+            except Exception:
                 pass
-        except:
+        except Exception:
             pass
         return True
     

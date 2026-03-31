@@ -63,10 +63,9 @@ OCR Text Extracted:
 """
                     return analysis
                 finally:
-                    import os
                     try:
                         os.unlink(temp_path)
-                    except:
+                    except OSError:
                         pass
             
             # Fallback to text-only analysis
@@ -80,7 +79,7 @@ OCR Text Extracted:
 
 Analyze this screen and describe what is displayed."""
             
-            return AIEngine.query_groq(system_prompt, analysis_prompt)
+            return AIEngine().query_groq(system_prompt, analysis_prompt)
         except Exception as e:
             logger.error(f"Screen analysis error: {e}")
             return f"Screen analysis: OCR found {len(ocr_text)} characters. Error: {str(e)}"

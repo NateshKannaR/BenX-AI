@@ -1157,7 +1157,7 @@ class FloatingGUI:
         if HOTKEY_AVAILABLE:
             try:
                 keyboard.unhook_all()
-            except:
+            except Exception:
                 pass
         
         if self.tray_icon:

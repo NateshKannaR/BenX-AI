@@ -341,7 +341,7 @@ class AIEngine:
                             logger.warning(f"Model {model} decommissioned - skipping")
                             failed_models.append(model)
                             continue
-                    except:
+                    except Exception:
                         pass
                 
                 response.raise_for_status()
@@ -515,14 +515,14 @@ Be thorough, accurate, and descriptive. Identify:
                 battery = psutil.sensors_battery()
                 if battery:
                     context_parts.append(f"Battery: {battery.percent}% ({'Charging' if battery.power_plugged else 'Discharging'})")
-            except:
+            except Exception:
                 pass
 
             try:
                 cpu = psutil.cpu_percent(interval=0.1)
                 memory = psutil.virtual_memory()
                 context_parts.append(f"CPU: {cpu:.1f}%, Memory: {memory.percent:.1f}%")
-            except:
+            except Exception:
                 pass
 
             context_parts.append(f"Time: {datetime.now().strftime('%H:%M:%S')}")
@@ -534,7 +534,7 @@ Be thorough, accurate, and descriptive. Identify:
                 logger.debug(f"Workspace context unavailable: {e}")
 
             return "\n".join(context_parts) if context_parts else "System state: Normal"
-        except:
+        except Exception:
             return "System state: Available"
     
     @staticmethod

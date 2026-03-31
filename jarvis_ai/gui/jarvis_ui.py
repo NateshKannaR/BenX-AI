@@ -327,9 +327,9 @@ class BenXUI:
                         self._battery_warned = False
                 else:
                     self.battery_label.config(text="Battery: N/A")
-            except:
+            except Exception:
                 self.battery_label.config(text="Battery: N/A")
-        except:
+        except Exception:
             pass
         
         if self.root:
@@ -432,7 +432,7 @@ class BenXUI:
                         self.root.after(0, self.log_activity, f"WhatsApp opened")
                     elif action == "send_whatsapp_message":
                         self.root.after(0, self.log_activity, f"WhatsApp message requested")
-                except:
+                except Exception:
                     pass
                     
         except Exception as e:
@@ -481,7 +481,7 @@ class BenXUI:
         if hasattr(self, 'compact_win') and self.compact_win:
             try:
                 self.compact_win.destroy()
-            except:
+            except Exception:
                 pass
         
         self.compact_win = tk.Toplevel(self.root)
@@ -568,7 +568,7 @@ class BenXUI:
         if hasattr(self, 'compact_win') and self.compact_win:
             try:
                 self.compact_win.destroy()
-            except:
+            except Exception:
                 pass
         
         # Show main window
@@ -620,7 +620,7 @@ class BenXUI:
             if hasattr(self, 'compact_win') and self.compact_win:
                 try:
                     self.compact_win.destroy()
-                except:
+                except Exception:
                     pass
             self.previous_mode = 'compact'
         else:
@@ -638,7 +638,7 @@ class BenXUI:
         if hasattr(self, 'restore_win') and self.restore_win:
             try:
                 self.restore_win.destroy()
-            except:
+            except Exception:
                 pass
         
         from PIL import Image, ImageDraw, ImageTk

@@ -65,7 +65,7 @@ class DependencyInstaller:
                 timeout=5
             )
             return result.returncode == 0
-        except:
+        except Exception:
             return False
     
     @staticmethod
@@ -147,7 +147,7 @@ class DependencyInstaller:
                         return True, f"✅ Successfully installed system packages: {', '.join(packages)}"
                     else:
                         return False, f"❌ System package installation failed: {result.stderr[:200]}"
-            except:
+            except Exception:
                 continue
         
         return False, f"❌ No package manager found. Please install manually: {', '.join(packages)}"
@@ -190,13 +190,13 @@ class DependencyInstaller:
         if callback:
             try:
                 confirmed = callback(message)
-            except:
+            except Exception:
                 pass
         else:
             try:
                 response = input(f"{message} [y/N]: ").strip().lower()
                 confirmed = response in ["y", "yes"]
-            except:
+            except Exception:
                 return None
         
         if not confirmed:

@@ -63,7 +63,7 @@ class CodeExecutor:
                 # Clean up
                 try:
                     os.unlink(temp_file)
-                except:
+                except OSError:
                     pass
         
         except subprocess.TimeoutExpired:

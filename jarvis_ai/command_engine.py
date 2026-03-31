@@ -253,7 +253,7 @@ class CommandEngine:
                     name = proc.info['name']
                     if name not in apps:
                         apps[name] = proc.info['pid']
-                except:
+                except Exception:
                     continue
             
             result = "📱 Running Applications:\n"
@@ -716,7 +716,7 @@ class CommandEngine:
                 try:
                     proc.info['cpu_percent'] = proc.cpu_percent(interval=0.1)
                     processes.append(proc.info)
-                except:
+                except Exception:
                     continue
             
             processes.sort(key=lambda x: x.get('cpu_percent', 0), reverse=True)
@@ -739,7 +739,7 @@ class CommandEngine:
                 try:
                     if query.lower() in proc.info['name'].lower():
                         matches.append(f"{proc.info['name']} (PID: {proc.info['pid']})")
-                except:
+                except Exception:
                     continue
             
             if matches:
@@ -782,7 +782,7 @@ class CommandEngine:
                 time_left = f" ({battery.secsleft // 3600}h {(battery.secsleft % 3600) // 60}m)" if battery.secsleft > 0 else ""
                 return f"{plugged}: {percent}%{time_left}"
             return "❌ Battery info not available"
-        except:
+        except Exception:
             return "❌ Battery info not available"
     
     @staticmethod
