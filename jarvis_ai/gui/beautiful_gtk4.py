@@ -1931,9 +1931,14 @@ class BeautifulBenXGTK4(Adw.ApplicationWindow):
         dialog.set_default_response("answer")
         dialog.set_close_response("reject")
 
+        _handled = [False]  # guard against double-fire on close
+
         def on_response(dlg, response_id):
+            if _handled[0]:
+                return
+            _handled[0] = True
             if response_id == "reject":
-                reject_cb()
+                threading.Thread(target=reject_cb, daemon=True).start()
                 self.add_compact_message("BenX", f"📵 Rejected call from {caller_name}")
                 self.log_activity(f"📵 Rejected call from {caller_name}")
             elif response_id == "busy":

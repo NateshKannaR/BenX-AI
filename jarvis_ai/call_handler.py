@@ -24,6 +24,13 @@ from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
+# Initialise DBus GLib mainloop once at import time, before any SystemBus()
+try:
+    import dbus.mainloop.glib
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+except Exception:
+    pass
+
 OFONO_SERVICE   = "org.ofono"
 OFONO_MANAGER   = "org.ofono.Manager"
 OFONO_VCMANAGER = "org.ofono.VoiceCallManager"
@@ -325,11 +332,9 @@ class BluetoothCallHandler:
     def _run_loop(self):
         try:
             import dbus
-            import dbus.mainloop.glib
             from gi.repository import GLib
 
-            main_loop = dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
-            bus      = dbus.SystemBus(mainloop=main_loop)
+            bus = dbus.SystemBus()
             self._loop = GLib.MainLoop()
 
             for modem_path, _ in _get_modems():
@@ -339,6 +344,13 @@ class BluetoothCallHandler:
                     dbus_interface=OFONO_VCMANAGER,
                     path=str(modem_path),
                     path_keyword="modem_path"
+                )
+                # Also watch PropertyChanged on existing calls
+                bus.add_signal_receiver(
+                    handler_function=self._on_call_property_changed,
+                    signal_name="PropertyChanged",
+                    dbus_interface=OFONO_VCALL,
+                    path_keyword="call_path"
                 )
                 logger.info("Watching modem %s", modem_path)
 
@@ -353,6 +365,25 @@ class BluetoothCallHandler:
             logger.error("Call handler loop error: %s", e)
         finally:
             self._active = False
+
+    def _on_call_property_changed(self, name, value, call_path=None):
+        """Catch calls that arrive with state change to 'incoming' after CallAdded."""
+        if name != "State" or str(value) not in ("incoming", "waiting"):
+            return
+        if not call_path:
+            return
+        try:
+            import dbus
+            bus = dbus.SystemBus()
+            call_iface = dbus.Interface(
+                bus.get_object(OFONO_SERVICE, call_path), OFONO_VCALL
+            )
+            props = call_iface.GetProperties()
+            number = str(props.get("LineIdentification", "Unknown"))
+            name_str = str(props.get("Name", "")) or number
+            self._dispatch_incoming(call_path, name_str, number)
+        except Exception as e:
+            logger.error("PropertyChanged handler error: %s", e)
 
     def _on_modem_added(self, path, properties):
         try:
@@ -374,32 +405,47 @@ class BluetoothCallHandler:
                 return
             number = str(properties.get("LineIdentification", "Unknown"))
             name   = str(properties.get("Name", "")) or number
-            logger.info("Incoming call from %s (%s)", name, number)
-
-            call_str = str(call_path)
-
-            def answer_cb(message: str):
-                try:
-                    import dbus
-                    bus = dbus.SystemBus()
-                    iface = dbus.Interface(bus.get_object(OFONO_SERVICE, call_str), OFONO_VCALL)
-                    iface.Answer()
-                    time.sleep(0.8)
-                    _speak(message)
-                    time.sleep(0.5)
-                    iface.Hangup()
-                except Exception as e:
-                    logger.error("Answer/speak failed: %s", e)
-
-            def reject_cb():
-                try:
-                    import dbus
-                    bus = dbus.SystemBus()
-                    iface = dbus.Interface(bus.get_object(OFONO_SERVICE, call_str), OFONO_VCALL)
-                    iface.Hangup()
-                except Exception as e:
-                    logger.error("Reject failed: %s", e)
-
-            self.on_incoming_call(name, number, answer_cb, reject_cb)
+            self._dispatch_incoming(str(call_path), name, number)
         except Exception as e:
-            logger.error("Error handling incoming call: %s", e)
+            logger.error("Error handling CallAdded: %s", e)
+
+    # track already-dispatched calls to avoid double popup
+    _dispatched: set = set()
+
+    def _dispatch_incoming(self, call_path: str, name: str, number: str):
+        if call_path in self._dispatched:
+            return
+        self._dispatched.add(call_path)
+        logger.info("Incoming call from %s (%s) path=%s", name, number, call_path)
+
+        def answer_cb(message: str):
+            try:
+                import dbus
+                bus = dbus.SystemBus()
+                iface = dbus.Interface(
+                    bus.get_object(OFONO_SERVICE, call_path), OFONO_VCALL
+                )
+                iface.Answer()
+                time.sleep(0.8)
+                _speak(message)
+                time.sleep(0.5)
+                iface.Hangup()
+            except Exception as e:
+                logger.error("Answer/speak failed: %s", e)
+            finally:
+                self._dispatched.discard(call_path)
+
+        def reject_cb():
+            try:
+                import dbus
+                bus = dbus.SystemBus()
+                iface = dbus.Interface(
+                    bus.get_object(OFONO_SERVICE, call_path), OFONO_VCALL
+                )
+                iface.Hangup()
+            except Exception as e:
+                logger.error("Reject failed: %s", e)
+            finally:
+                self._dispatched.discard(call_path)
+
+        self.on_incoming_call(name, number, answer_cb, reject_cb)
