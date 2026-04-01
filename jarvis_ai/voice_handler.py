@@ -65,18 +65,36 @@ class VoiceHandler:
     # ── Microphone input ──────────────────────────────────────────────────────
 
     def listen(self) -> Optional[str]:
-        """Listen from microphone."""
-        if not self.recognizer:
-            return None
+        """Listen from microphone. Falls back to Groq Whisper if speech_recognition unavailable."""
+        if self.recognizer:
+            try:
+                with sr.Microphone() as source:
+                    self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                    audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=15)
+                return self.recognizer.recognize_google(audio)
+            except sr.UnknownValueError:
+                return None
+            except Exception as e:
+                logger.error(f"Mic listen error: {e}")
+                return None
+        # fallback: record via parec+ffmpeg and transcribe with Groq Whisper
         try:
-            with sr.Microphone() as source:
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=15)
-            return self.recognizer.recognize_google(audio)
-        except sr.UnknownValueError:
-            return None
+            from jarvis_ai.wake_word_engine import _get_mic_source, _record_wav, _transcribe_groq
+            source = _get_mic_source()
+            if not source:
+                return None
+            wav = _record_wav(source, 6)
+            if not wav:
+                return None
+            text = _transcribe_groq(wav)
+            import os
+            try:
+                os.remove(wav)
+            except OSError:
+                pass
+            return text.strip() if text else None
         except Exception as e:
-            logger.error(f"Mic listen error: {e}")
+            logger.error(f"Whisper fallback listen error: {e}")
             return None
 
     # ── System audio capture ──────────────────────────────────────────────────
@@ -179,16 +197,25 @@ class VoiceHandler:
     # ── TTS ───────────────────────────────────────────────────────────────────
 
     def speak(self, text: str):
-        """Speak text using TTS."""
-        if not self.tts_engine:
-            return
+        """Speak text using TTS, fallback to espeak."""
+        if self.tts_engine:
+            try:
+                threading.Thread(
+                    target=lambda: (self.tts_engine.say(text), self.tts_engine.runAndWait()),
+                    daemon=True
+                ).start()
+                return
+            except Exception as e:
+                logger.error(f"TTS error: {e}")
+        # fallback to espeak
         try:
-            threading.Thread(
-                target=lambda: (self.tts_engine.say(text), self.tts_engine.runAndWait()),
-                daemon=True
-            ).start()
+            import subprocess
+            subprocess.Popen(
+                ["espeak", "-s", "140", "-v", "en", text],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
         except Exception as e:
-            logger.error(f"TTS error: {e}")
+            logger.error(f"espeak fallback error: {e}")
 
 
 
