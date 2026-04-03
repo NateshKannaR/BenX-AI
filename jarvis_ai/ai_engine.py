@@ -274,131 +274,139 @@ class AIEngine:
                    use_vision: bool = False,
                    task_type: Optional[str] = None,
                    stream: bool = False) -> Union[str, Generator[str, None, None]]:
-        """Query Groq API with smart model routing, fallback, image support, and optional streaming"""
+        """Query Groq API. Returns str normally, or delegates to stream generator."""
+        if stream:
+            return AIEngine._query_groq_stream(
+                system_prompt, user_prompt,
+                model_preference=model_preference,
+                conversation_context=conversation_context,
+                image_path=image_path,
+                use_vision=use_vision,
+                task_type=task_type,
+            )
+        # ── non-streaming path always returns str ──────────────────────────
         if not Config.GROQ_KEY:
-            if stream:
-                yield "❌ Missing GROQ_API_KEY. Set it in your environment before running."
-                return
-            return "❌ Missing GROQ_API_KEY. Set it in your environment before running."
+            return "\u274c Missing GROQ_API_KEY. Set it in your environment before running."
         headers = {
             "Authorization": f"Bearer {Config.GROQ_KEY}",
             "Content-Type": "application/json"
         }
-
-        # Smart model routing
         if task_type is None:
             task_type = AIEngine._detect_task_type(user_prompt, use_vision)
         route = Config.MODEL_ROUTES.get(task_type, Config.MODEL_ROUTES["chat"])
-        # Merge route + full list as fallback, deduplicated
         models = list(dict.fromkeys(route + Config.MODELS))
-
         if model_preference and model_preference in models:
             models.remove(model_preference)
             models.insert(0, model_preference)
-
-        logger.info(f"🧠 Task type: {task_type} → primary model: {models[0]}")
-
+        logger.info(f"\U0001f9e0 Task type: {task_type} \u2192 primary model: {models[0]}")
         messages = [{"role": "system", "content": system_prompt}]
         if conversation_context:
             messages.extend(conversation_context[-30:])
-        
-        # Add image if provided and vision is enabled
         user_message_content = user_prompt
         if use_vision and image_path and IMAGE_AVAILABLE:
             base64_image = AIEngine.encode_image(image_path)
             if base64_image:
                 user_message_content = [
                     {"type": "text", "text": user_prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{base64_image}"
-                        }
-                    }
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}}
                 ]
-        
         messages.append({"role": "user", "content": user_message_content})
-        
         failed_models = []
         for model in models:
             try:
                 data = {
-                    "model": model,
-                    "messages": messages,
-                    "temperature": 0.8,
-                    "max_tokens": 4000,
-                    "top_p": 0.9,
-                    "stream": stream
+                    "model": model, "messages": messages,
+                    "temperature": 0.8, "max_tokens": 4000,
+                    "top_p": 0.9, "stream": False
                 }
-                
-                logger.debug(f"Trying model: {model}")
-                response = requests.post(Config.API_URL, headers=headers, json=data, timeout=Config.API_TIMEOUT, stream=stream)
-                
+                response = requests.post(
+                    Config.API_URL, headers=headers, json=data,
+                    timeout=Config.API_TIMEOUT
+                )
                 if response.status_code == 404:
                     logger.warning(f"Model {model} not found (404)")
                     failed_models.append(model)
                     continue
                 response.raise_for_status()
-                
-                if stream:
-                    full_response = ""
-                    for line in response.iter_lines():
-                        if line:
-                            line = line.decode('utf-8')
-                            if line.startswith('data: '):
-                                chunk = line[6:]
-                                if chunk == '[DONE]':
-                                    break
-                                try:
-                                    delta = json.loads(chunk)['choices'][0]['delta'].get('content', '')
-                                    if delta:
-                                        full_response += delta
-                                        yield delta
-                                except (json.JSONDecodeError, KeyError, IndexError):
-                                    continue
-                    logger.info(f"✅ Streamed model: {model}")
-                    return
-                else:
-                    result = response.json()
-                    if "choices" in result and result["choices"]:
-                        logger.info(f"✅ Used model: {model}")
-                        return result["choices"][0]["message"]["content"]
-                    else:
-                        logger.warning(f"Model {model} empty response")
-                        failed_models.append(model)
-                        continue
-                    
+                result = response.json()
+                if "choices" in result and result["choices"]:
+                    logger.info(f"\u2705 Used model: {model}")
+                    return result["choices"][0]["message"]["content"]
+                failed_models.append(model)
             except requests.exceptions.Timeout:
                 logger.warning(f"Model {model} timed out")
                 failed_models.append(model)
-                continue
             except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 401:
-                    logger.error(f"❌ Authentication failed (401) - Invalid or expired API key")
-                    error_msg = "❌ Authentication failed. Please check your Groq API key.\n"
-                    error_msg += "Set GROQ_API_KEY environment variable or update jarvis_ai/config.py"
-                    return error_msg
-                elif e.response.status_code == 404:
-                    logger.warning(f"Model {model} not found (404)")
-                elif e.response.status_code == 429:
-                    logger.warning(f"Model {model} rate limited (429)")
-                else:
-                    logger.warning(f"Model {model} HTTP error: {e.response.status_code}")
+                code = e.response.status_code
+                if code == 401:
+                    return "\u274c Authentication failed. Please check your Groq API key."
+                logger.warning(f"Model {model} HTTP {code}")
                 failed_models.append(model)
-                continue
             except Exception as e:
                 logger.warning(f"Model {model} failed: {str(e)[:100]}")
                 failed_models.append(model)
+        return (f"\u274c All {len(models)} AI models failed. "
+                "Check your GROQ_API_KEY and connection.")
+
+    @staticmethod
+    def _query_groq_stream(system_prompt: str, user_prompt: str,
+                           model_preference: Optional[str] = None,
+                           conversation_context: List[Dict] = None,
+                           image_path: Optional[str] = None,
+                           use_vision: bool = False,
+                           task_type: Optional[str] = None) -> Generator[str, None, None]:
+        """Streaming variant of query_groq — yields text chunks."""
+        if not Config.GROQ_KEY:
+            yield "\u274c Missing GROQ_API_KEY."
+            return
+        headers = {
+            "Authorization": f"Bearer {Config.GROQ_KEY}",
+            "Content-Type": "application/json"
+        }
+        if task_type is None:
+            task_type = AIEngine._detect_task_type(user_prompt, use_vision)
+        route = Config.MODEL_ROUTES.get(task_type, Config.MODEL_ROUTES["chat"])
+        models = list(dict.fromkeys(route + Config.MODELS))
+        if model_preference and model_preference in models:
+            models.remove(model_preference)
+            models.insert(0, model_preference)
+        messages = [{"role": "system", "content": system_prompt}]
+        if conversation_context:
+            messages.extend(conversation_context[-30:])
+        messages.append({"role": "user", "content": user_prompt})
+        for model in models:
+            try:
+                data = {
+                    "model": model, "messages": messages,
+                    "temperature": 0.8, "max_tokens": 4000,
+                    "top_p": 0.9, "stream": True
+                }
+                response = requests.post(
+                    Config.API_URL, headers=headers, json=data,
+                    timeout=Config.API_TIMEOUT, stream=True
+                )
+                if response.status_code == 404:
+                    continue
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if line:
+                        line = line.decode("utf-8")
+                        if line.startswith("data: "):
+                            chunk = line[6:]
+                            if chunk == "[DONE]":
+                                break
+                            try:
+                                delta = json.loads(chunk)["choices"][0]["delta"].get("content", "")
+                                if delta:
+                                    yield delta
+                            except (json.JSONDecodeError, KeyError, IndexError):
+                                continue
+                logger.info(f"\u2705 Streamed model: {model}")
+                return
+            except Exception as e:
+                logger.warning(f"Stream model {model} failed: {str(e)[:100]}")
                 continue
-        
-        error_msg = f"❌ All {len(models)} AI models failed."
-        if failed_models:
-            error_msg += f"\n\nMost common issues:"
-            error_msg += f"\n1. Invalid API key - Get a free key from: https://console.groq.com/keys"
-            error_msg += f"\n2. Set environment variable: export GROQ_API_KEY='your_key_here'"
-            error_msg += f"\n3. Or update jarvis_ai/config.py with your key"
-        error_msg += "\n\nCheck your connection and API key."
-        return error_msg
+        yield "\u274c All models failed for streaming."
     
     def agent_run(self, user_goal: str, confirm_cb=None, on_step_cb=None) -> Optional[str]:
         """Run agentic loop. Returns None if goal is simple."""
