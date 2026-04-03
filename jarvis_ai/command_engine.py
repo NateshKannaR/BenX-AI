@@ -1300,7 +1300,7 @@ class CommandEngine:
     @staticmethod
     def type_in_active_window(text: str) -> str:
         """Type text in currently focused window."""
-        import shutil
+        import shutil, subprocess
         if not text:
             return "❌ No text provided"
         if shutil.which("wtype"):
