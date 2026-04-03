@@ -272,9 +272,13 @@ class AIEngine:
                    conversation_context: List[Dict] = None,
                    image_path: Optional[str] = None,
                    use_vision: bool = False,
-                   task_type: Optional[str] = None) -> str:
-        """Query Groq API with smart model routing, fallback, and image support"""
+                   task_type: Optional[str] = None,
+                   stream: bool = False) -> Union[str, Generator[str, None, None]]:
+        """Query Groq API with smart model routing, fallback, image support, and optional streaming"""
         if not Config.GROQ_KEY:
+            if stream:
+                yield "❌ Missing GROQ_API_KEY. Set it in your environment before running."
+                return
             return "❌ Missing GROQ_API_KEY. Set it in your environment before running."
         headers = {
             "Authorization": f"Bearer {Config.GROQ_KEY}",
@@ -324,36 +328,45 @@ class AIEngine:
                     "temperature": 0.8,
                     "max_tokens": 4000,
                     "top_p": 0.9,
+                    "stream": stream
                 }
                 
                 logger.debug(f"Trying model: {model}")
-                response = requests.post(Config.API_URL, headers=headers, json=data, timeout=Config.API_TIMEOUT)
+                response = requests.post(Config.API_URL, headers=headers, json=data, timeout=Config.API_TIMEOUT, stream=stream)
                 
-                # Check for specific error codes and skip faster
                 if response.status_code == 404:
-                    logger.warning(f"Model {model} not found (404) - skipping")
+                    logger.warning(f"Model {model} not found (404)")
                     failed_models.append(model)
                     continue
-                elif response.status_code == 400:
-                    try:
-                        error_data = response.json()
-                        if "model_decommissioned" in str(error_data):
-                            logger.warning(f"Model {model} decommissioned - skipping")
-                            failed_models.append(model)
-                            continue
-                    except Exception:
-                        pass
-                
                 response.raise_for_status()
                 
-                result = response.json()
-                if "choices" in result and result["choices"]:
-                    logger.info(f"✅ Successfully used model: {model}")
-                    return result["choices"][0]["message"]["content"]
+                if stream:
+                    full_response = ""
+                    for line in response.iter_lines():
+                        if line:
+                            line = line.decode('utf-8')
+                            if line.startswith('data: '):
+                                chunk = line[6:]
+                                if chunk == '[DONE]':
+                                    break
+                                try:
+                                    delta = json.loads(chunk)['choices'][0]['delta'].get('content', '')
+                                    if delta:
+                                        full_response += delta
+                                        yield delta
+                                except (json.JSONDecodeError, KeyError, IndexError):
+                                    continue
+                    logger.info(f"✅ Streamed model: {model}")
+                    return
                 else:
-                    logger.warning(f"Model {model} returned empty choices")
-                    failed_models.append(model)
-                    continue
+                    result = response.json()
+                    if "choices" in result and result["choices"]:
+                        logger.info(f"✅ Used model: {model}")
+                        return result["choices"][0]["message"]["content"]
+                    else:
+                        logger.warning(f"Model {model} empty response")
+                        failed_models.append(model)
+                        continue
                     
             except requests.exceptions.Timeout:
                 logger.warning(f"Model {model} timed out")
@@ -485,25 +498,40 @@ CONTEXT RULES:
 
         return response
     
-    def analyze_image(self, image_path: str, question: str = "What is in this image?") -> str:
-        """Analyze an image using vision models"""
+    def analyze_image(self, image_path: str, question: str = "What is in this image?", chain_action: bool = True) -> str:
+        """Analyze an image using vision models with optional agent chaining for actions"""
         if not IMAGE_AVAILABLE:
             return "❌ Image processing not available. Install: pip install Pillow"
         
-        system_prompt = """You are BenX's vision assistant. Analyze images and provide detailed descriptions, answer questions about images, and extract information from visual content.
+        system_prompt = """You are BenX's vision assistant. Analyze images and provide detailed descriptions.
+If actionable UI elements are detected (buttons, forms, links, etc.), suggest specific actions.
+Format suggestions as JSON commands if appropriate.
 
-Be thorough, accurate, and descriptive. Identify:
-- Objects, people, text, UI elements
-- Context and scene understanding
-- Actions that can be performed
-- Any important details"""
+Structure response:
+1. DESCRIPTION: What's visible
+2. ELEMENTS: UI buttons/text/links detected
+3. ACTIONS: Possible next steps (optional JSON commands)
+4. SUMMARY: One sentence summary"""
         
-        return self.query_groq(
+        response = "".join(self.query_groq(
             system_prompt,
             question,
             image_path=image_path,
-            use_vision=True
-        )
+            use_vision=True,
+            stream=True
+        ))
+        
+        if chain_action and self._agent:
+            # Check if response suggests action
+            if any(word in response.lower() for word in ["click", "open", "type", "action", "button"]):
+                action_prompt = f"Vision analysis: {response[:500]}. Convert suggested actions to JSON command."
+                cmd_json = self.interpret_command(action_prompt)
+                if cmd_json != '{"command":"none"}':
+                    from jarvis_ai.executor import CommandExecutor
+                    action_result = CommandExecutor.execute(cmd_json, self, "vision-chained")
+                    return f"📸 Analysis: {response}\n\n🔗 Auto-action: {action_result}"
+        
+        return response
     
     def _get_system_context(self) -> str:
         """Get current system state + full workspace context for AI"""
