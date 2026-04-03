@@ -1299,11 +1299,21 @@ class CommandEngine:
     
     @staticmethod
     def type_in_active_window(text: str) -> str:
-        """Type text in currently focused window (generic)"""
-        import subprocess
-        if subprocess.run("wtype -M --no-ap " + shlex.quote(text), shell=True, timeout=10).returncode == 0:
-            return f"✅ Typed '{text}' in active window"
-        return "❌ Typing failed - no wtype/pyautogui"
+        """Type text in currently focused window."""
+        import shutil
+        if not text:
+            return "❌ No text provided"
+        if shutil.which("wtype"):
+            r = subprocess.run(["wtype", text], capture_output=True, timeout=10)
+            if r.returncode == 0:
+                return f"✅ Typed: {text[:50]}"
+            return f"❌ wtype failed: {r.stderr.decode()[:80]}"
+        if shutil.which("xdotool"):
+            r = subprocess.run(["xdotool", "type", "--clearmodifiers", text], capture_output=True, timeout=10)
+            if r.returncode == 0:
+                return f"✅ Typed: {text[:50]}"
+            return f"❌ xdotool failed: {r.stderr.decode()[:80]}"
+        return "❌ Typing failed - install wtype: sudo pacman -S wtype"
 
     @staticmethod
     def browser_list_tabs(workspace: Optional[int] = None) -> str:
