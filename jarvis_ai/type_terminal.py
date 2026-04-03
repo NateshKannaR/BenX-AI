@@ -24,7 +24,7 @@ def type_in_ws_terminal(workspace: int, text: str) -> str:
     # 2. Focus terminal (konsole/alacritty/kitty)
     terminals = ["konsole", "alacritty", "kitty", "gnome-terminal", "xfce4-terminal"]
     for term in terminals:
-        focus_result = WorkspaceMonitor.focus_window(term)
+        focus_result = WorkspaceMonitor.focus_window_by_title(term)
         if "✅" in focus_result:
             break
     else:
@@ -56,7 +56,7 @@ def send_keys_to_ws_terminal(workspace: int, keys: str) -> str:
     
     terminals = ["konsole", "alacritty"]
     for term in terminals:
-        if "✅" in WorkspaceMonitor.focus_window(term):
+        if "✅" in WorkspaceMonitor.focus_window_by_title(term):
             break
     else:
         return "❌ No terminal in WS"
