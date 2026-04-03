@@ -587,6 +587,15 @@ Structure response:
         
         system_prompt = """You are BenX's command interpreter. Your job is to understand user intent and convert it to precise JSON commands.
 
+**NEW TERMINAL AUTOMATION**:
+- type_in_ws_terminal(workspace=N, text=TEXT): "type TEXT in ws N", "in workspace N type hello"
+- type_in_active_window(text=TEXT): "type hello in that terminal", "in that konsole type ls"
+
+Examples:
+"in ws 1 type ls -la" → {"command":"type_in_ws_terminal","workspace":1,"text":"ls -la"}
+"in that terminal type hello" → {"command":"type_in_active_window","text":"hello"}
+
+
 THINKING PROCESS:
 1. Analyze the user's intent deeply - what do they REALLY want?
 2. Consider context from conversation (e.g., "make it louder" after volume discussion)

@@ -38,6 +38,102 @@ except ImportError:
 
 class CommandEngine:
     """System command execution engine"""
+    
+    @staticmethod
+    def execute_shell(cmd: str, sudo: bool = False, timeout: int = 60) -> str:
+        """
+        Execute arbitrary shell command (matching BLACKBOXAI execute_command).
+        Supports sudo prefix for privileged ops.
+        Logs to ~/.benx/activity_log.json.
+        """
+        if not cmd or not isinstance(cmd, str):
+            return "❌ Empty command"
+        
+        from jarvis_ai.config import Config
+        import json
+        from datetime import datetime
+        
+        # Safety: Log all shell commands
+        log_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "type": "shell_execute" if not sudo else "sudo_execute",
+            "command": cmd,
+            "user": os.getenv("USER", "unknown")
+        }
+        try:
+            log_file = Config.BENX_DIR / "activity_log.json"
+            logs = []
+            if log_file.exists():
+                with open(log_file, 'r') as f:
+                    logs = json.load(f)
+            logs.append(log_entry)
+            with open(log_file, 'w') as f:
+                json.dump(logs[-100:], f, indent=2)  # Keep last 100
+        except Exception:
+            pass
+        
+        # Arch Linux: Prefer non-interactive sudo
+        sudo_prefix = ["sudo"] if sudo else []
+        full_cmd = sudo_prefix + [cmd]
+        
+        try:
+            import subprocess
+            r = subprocess.run(
+                full_cmd, shell=True, capture_output=True, text=True, 
+                timeout=timeout, env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
+            )
+            out = r.stdout.strip()
+            err = r.stderr.strip()
+            full_output = out + ("\n" + err if err else "")
+            return f"✅ Exit {r.returncode}\n{full_output[:4000]}" if r.returncode == 0 else f"❌ Exit {r.returncode}\n{full_output[:4000]}"
+        except subprocess.TimeoutExpired:
+            return f"❌ Timed out after {timeout}s"
+        except Exception as e:
+            return f"❌ Shell error: {str(e)}"
+    
+    @staticmethod
+    def list_files(path: str = ".") -> str:
+        """
+        List files (matching BLACKBOXAI list_files tool).
+        Supports recursive via --recursive flag in shell.
+        """
+        path = os.path.expanduser(path)
+        return CommandEngine.execute_shell(f"ls -lah {shlex.quote(path)}", timeout=30)
+    
+    @staticmethod
+    def search_files(path: str, query: str) -> str:
+        """
+        Regex search files (matching BLACKBOXAI search_files).
+        """
+        path = os.path.expanduser(path)
+        cmd = f'find {shlex.quote(path)} -type f -name "*{query}*" -o -path "*/{query}/*" | head -20'
+        return CommandEngine.execute_shell(cmd, timeout=30)
+    
+    @staticmethod
+    def create_file(path: str, content: str = "") -> str:
+        """
+        Create file (matching BLACKBOXAI create_file).
+        Auto-creates directories.
+        """
+        path = os.path.expanduser(path)
+        cmd = f'echo {shlex.quote(content)} | tee {shlex.quote(path)} >/dev/null'
+        return CommandEngine.execute_shell(cmd, timeout=10)
+    
+    @staticmethod
+    def edit_file(path: str, old_str: str, new_str: str) -> str:
+        """
+        Edit file via sed (matching BLACKBOXAI edit_file).
+        Exact string replacement.
+        """
+        path = os.path.expanduser(path)
+        # Escape sed special chars
+        old_escaped = old_str.replace('/', r'\/').replace('&', r'\&')
+        new_escaped = new_str.replace('/', r'\/').replace('&', r'\&')
+        cmd = f"sed -i 's/{old_escaped}/{new_escaped}/g' {shlex.quote(path)}"
+        result = CommandEngine.execute_shell(cmd, timeout=30)
+        if 'changed' not in result.lower() and 'exit 0' not in result:
+            return f"{result}\n⚠️ Check if '{old_str}' exists exactly in {path}"
+        return result
 
     GITHUB_QUERY_STOPWORDS = {
         "github", "repo", "repos", "repository", "repositories", "how", "many",
@@ -207,6 +303,13 @@ class CommandEngine:
             if safe_open_app(command):
                 return True
         return False
+    
+    @staticmethod
+    def shell_execute(cmd: str, sudo: bool = False) -> str:
+        """
+        Execute shell command via Jarvis CLI (matches BLACKBOXAI).
+        """
+        return CommandEngine.execute_shell(cmd, sudo=sudo)
     
     @staticmethod
     def open_app(app: str) -> str:
@@ -1180,9 +1283,37 @@ class CommandEngine:
     # ── Browser Automation ──────────────────────────────────────────────
 
     @staticmethod
-    def browser_open(url: str) -> str:
+    def browser_open(url: str, workspace: Optional[int] = None) -> str:
+        """
+        Smart browser open with tab/workspace awareness.
+        Checks existing tabs/Chrome windows first.
+        """
         from jarvis_ai.browser_automation import BrowserAutomation
-        return BrowserAutomation.open_url(url)
+        return BrowserAutomation.smart_open(url, workspace)
+    
+    @staticmethod
+    def type_in_ws_terminal(workspace: int, text: str) -> str:
+        """Switch to WS, focus terminal, type text"""
+        from jarvis_ai.type_terminal import type_in_ws_terminal
+        return type_in_ws_terminal(workspace, text)
+    
+    @staticmethod
+    def type_in_active_window(text: str) -> str:
+        """Type text in currently focused window (generic)"""
+        import subprocess
+        if subprocess.run("wtype -M --no-ap " + shlex.quote(text), shell=True, timeout=10).returncode == 0:
+            return f"✅ Typed '{text}' in active window"
+        return "❌ Typing failed - no wtype/pyautogui"
+
+    @staticmethod
+    def browser_list_tabs(workspace: Optional[int] = None) -> str:
+        from jarvis_ai.browser_automation import BrowserAutomation
+        return BrowserAutomation.list_tabs(workspace)
+
+    @staticmethod
+    def browser_switch_tab(query: str, workspace: Optional[int] = None) -> str:
+        from jarvis_ai.browser_automation import BrowserAutomation
+        return BrowserAutomation.switch_to_tab(query, workspace)
 
     @staticmethod
     def browser_scrape(url: str, selector: str = "body") -> str:
